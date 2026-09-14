@@ -121,6 +121,37 @@ describe("presentAssistantMessage - Custom Tool Recording", () => {
 			// Should record as "custom_tool", not "my_custom_tool"
 			expect(mockTask.recordToolUsage).toHaveBeenCalledWith("custom_tool")
 		})
+
+		it("passes the task-local mode to custom tool execution", async () => {
+			mockTask.getTaskMode.mockResolvedValue("code")
+			mockTask.providerRef.deref = () => ({
+				getState: vi.fn().mockResolvedValue({
+					mode: "orchestrator",
+					customModes: [],
+					experiments: { customTools: true },
+				}),
+			})
+			mockTask.assistantMessageContent = [
+				{
+					type: "tool_use",
+					id: "tool_call_task_mode",
+					name: "my_custom_tool",
+					params: {},
+					partial: false,
+				},
+			]
+			const execute = vi.fn().mockResolvedValue("Custom tool result")
+			vi.mocked(customToolRegistry.has).mockReturnValue(true)
+			vi.mocked(customToolRegistry.get).mockReturnValue({
+				name: "my_custom_tool",
+				description: "A custom tool",
+				execute,
+			})
+
+			await presentAssistantMessage(mockTask)
+
+			expect(execute).toHaveBeenCalledWith(undefined, { mode: "code", task: mockTask })
+		})
 	})
 
 	describe("Custom tool error recording", () => {

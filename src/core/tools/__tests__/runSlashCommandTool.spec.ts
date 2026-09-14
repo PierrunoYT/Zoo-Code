@@ -97,6 +97,7 @@ describe("runSlashCommandTool", () => {
 			},
 		}
 
+		mockTask.getTaskMode.mockResolvedValue("code")
 		const getSkillContent = vi.fn().mockResolvedValue({
 			name: "skill-only",
 			description: "Skill-generated command",
@@ -110,7 +111,7 @@ describe("runSlashCommandTool", () => {
 				experiments: {
 					runSlashCommand: true,
 				},
-				mode: "code",
+				mode: "orchestrator",
 			}),
 			getSkillsManager: vi.fn().mockReturnValue({
 				getSkillContent,
