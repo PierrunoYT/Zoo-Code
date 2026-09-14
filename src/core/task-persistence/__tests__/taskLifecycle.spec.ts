@@ -5,6 +5,8 @@ import {
 	completeDelegatedChild,
 	delegateTaskToChild,
 	interruptDelegatedChild,
+	isDeadDelegationChain,
+	recoverDeadDelegatedChild,
 } from "../taskLifecycle"
 
 function item(id: string, overrides: Partial<HistoryItem> = {}): HistoryItem {
@@ -62,6 +64,43 @@ describe("task lifecycle transitions", () => {
 		const child = item("child", { parentTaskId: "parent" })
 
 		expect(interruptDelegatedChild(parent, child)).toMatchObject({ status: "interrupted", parentTaskId: "parent" })
+	})
+
+	it("recognizes only delegated chains that terminate without a live owner", () => {
+		const interrupted = item("grandchild", { status: "interrupted" })
+		const child = item("child", { status: "delegated", awaitingChildId: interrupted.id })
+		const tasks = new Map([interrupted].map((task) => [task.id, task]))
+
+		expect(isDeadDelegationChain(child, (id) => tasks.get(id))).toBe(true)
+		expect(
+			isDeadDelegationChain(
+				child,
+				(id) => tasks.get(id),
+				(id) => id === child.id,
+			),
+		).toBe(false)
+		expect(isDeadDelegationChain({ ...child, status: "active" }, (id) => tasks.get(id))).toBe(false)
+		expect(isDeadDelegationChain({ ...child, awaitingChildId: "missing" }, (id) => tasks.get(id))).toBe(true)
+	})
+
+	it("recovers a dead delegated child without releasing its parent's ownership", () => {
+		const parent = item("parent", { status: "delegated", awaitingChildId: "child", delegatedToId: "child" })
+		const child = item("child", {
+			status: "delegated",
+			parentTaskId: "parent",
+			awaitingChildId: "grandchild",
+			delegatedToId: "grandchild",
+		})
+
+		expect(recoverDeadDelegatedChild(parent, child)).toMatchObject({
+			id: "child",
+			status: "interrupted",
+			parentTaskId: "parent",
+			awaitingChildId: undefined,
+			delegatedToId: undefined,
+		})
+		expect(parent).toMatchObject({ status: "delegated", awaitingChildId: "child" })
+		expect(() => recoverDeadDelegatedChild(parent, { ...child, status: "active" })).toThrow(/status active/)
 	})
 
 	it("completes only the child the parent still awaits", () => {

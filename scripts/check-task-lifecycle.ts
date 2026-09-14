@@ -7,6 +7,7 @@ import {
 	completeDelegatedChild,
 	delegateTaskToChild,
 	interruptDelegatedChild,
+	recoverDeadDelegatedChild,
 } from "../src/core/task-persistence/taskLifecycle"
 
 const taskIds = ["parent", "child-a", "child-b"] as const
@@ -25,7 +26,7 @@ interface TraceStep {
 
 const MAX_DEPTH = 12
 const MAX_STATES = 10_000
-const expectedActions = ["delegate", "interrupt", "complete", "abandon"] as const
+const expectedActions = ["delegate", "interrupt", "recover", "complete", "abandon"] as const
 const semanticLandmarks = {
 	"interrupted-child-redelegation": (state: ModelState) =>
 		state.parent?.status === "delegated" &&
@@ -36,6 +37,12 @@ const semanticLandmarks = {
 		state.parent.awaitingChildId === "child-a" &&
 		state["child-a"]?.status === "delegated" &&
 		state["child-a"].awaitingChildId === "child-b",
+	"dead-nested-chain-recovered": (state: ModelState) =>
+		state.parent?.status === "delegated" &&
+		state.parent.awaitingChildId === "child-a" &&
+		state["child-a"]?.status === "interrupted" &&
+		state["child-a"].awaitingChildId === undefined &&
+		state["child-b"]?.status === "interrupted",
 } satisfies Record<string, (state: ModelState) => boolean>
 
 function task(id: TaskId, parentTaskId?: TaskId): HistoryItem {
@@ -93,6 +100,14 @@ function transitions(state: ModelState): Transition[] {
 		if (parent.status === "delegated" && parent.awaitingChildId === child.id && child.status === "active") {
 			const interrupted = interruptDelegatedChild(parent, child)
 			result.push({ name: `interrupt(${childId})`, next: replace(state, interrupted) })
+		}
+
+		if (parent.status === "delegated" && parent.awaitingChildId === child.id && child.status === "delegated") {
+			const awaitedChild = child.awaitingChildId ? state[child.awaitingChildId as TaskId] : undefined
+			if (awaitedChild?.status === "interrupted") {
+				const recovered = recoverDeadDelegatedChild(parent, child)
+				result.push({ name: `recover(${childId})`, next: replace(state, recovered) })
+			}
 		}
 
 		if (
@@ -274,6 +289,13 @@ function runRepresentativeScenarios(): void {
 	const nestedCompletion = completeDelegatedChild(nestedParent, childB, "nested result")
 	assert.equal(nestedCompletion.parent.status, "active")
 	assert.equal(nestedCompletion.parent.completedByChildId, childB.id)
+	const interruptedNestedChild = interruptDelegatedChild(nestedParent, childB)
+	const recoveredNestedParent = recoverDeadDelegatedChild(delegated, {
+		...nestedParent,
+		awaitingChildId: interruptedNestedChild.id,
+	})
+	assert.equal(recoveredNestedParent.status, "interrupted")
+	assert.equal(recoveredNestedParent.awaitingChildId, undefined)
 
 	const interruptedCompletion = completeDelegatedChild(delegated, interruptedA, "resumed result")
 	assert.equal(interruptedCompletion.child.status, "completed")
