@@ -19,6 +19,7 @@ describe("runSlashCommandTool", () => {
 		vi.clearAllMocks()
 
 		mockTask = {
+			getTaskMode: vi.fn().mockResolvedValue("code"),
 			consecutiveMistakeCount: 0,
 			recordToolError: vi.fn(),
 			sayAndCreateMissingParamError: vi.fn().mockResolvedValue("Missing parameter error"),
