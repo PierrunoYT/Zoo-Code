@@ -519,11 +519,12 @@ describe("ClineProvider.delegateParentAndOpenChild()", () => {
 				return []
 			}),
 		})
+		const parentTask = makeParentTask()
 
 		const provider = {
 			taskScheduler: new TaskScheduler(),
 			emit: vi.fn(),
-			getCurrentTask: vi.fn(() => makeParentTask()),
+			getCurrentTask: vi.fn(() => parentTask),
 			removeClineFromStack: vi.fn().mockResolvedValue(undefined),
 			createTask: vi.fn().mockResolvedValue({ taskId: "child-2", start: vi.fn(), run: () => Promise.resolve() }),
 			handleModeSwitch: vi.fn().mockResolvedValue(undefined),
@@ -596,11 +597,12 @@ describe("ClineProvider.delegateParentAndOpenChild()", () => {
 				return []
 			}),
 		})
+		const parentTask = makeParentTask()
 		const provider = {
 			taskScheduler: new TaskScheduler(),
 			taskRegistry: { hasRunning: vi.fn().mockReturnValue(false) },
 			emit: vi.fn(),
-			getCurrentTask: vi.fn(() => makeParentTask()),
+			getCurrentTask: vi.fn(() => parentTask),
 			removeClineFromStack: vi.fn().mockResolvedValue(undefined),
 			createTask: vi.fn().mockResolvedValue({ taskId: "child-2", run: vi.fn().mockResolvedValue(undefined) }),
 			log: vi.fn(),
@@ -650,7 +652,7 @@ describe("ClineProvider.delegateParentAndOpenChild()", () => {
 			get: vi.fn((id: string) => (id === "parent-1" ? parent : id === oldChildId ? child : grandchild)),
 		})
 		const provider = {
-			taskRegistry: { hasRunning: vi.fn((id: string) => id === oldChildId) },
+			taskRegistry: { hasRunning: vi.fn((id: string) => id === grandchildId) },
 			getCurrentTask: vi.fn(() => makeParentTask()),
 			removeClineFromStack: vi.fn(),
 			createTask: vi.fn(),
@@ -738,6 +740,243 @@ describe("ClineProvider.delegateParentAndOpenChild()", () => {
 				mode: "code",
 			}),
 		).rejects.toThrow(`Delegation chain for child ${oldChildId} became live during recovery`)
+		expect(provider.createTask).not.toHaveBeenCalled()
+	})
+
+	it("does not recover when a descendant is live in another provider", async () => {
+		const oldChildId = "old-child"
+		const grandchildId = "grandchild"
+		const parent = {
+			...parentHistoryItem,
+			status: "delegated" as const,
+			awaitingChildId: oldChildId,
+			delegatedToId: oldChildId,
+		}
+		const child = {
+			...parentHistoryItem,
+			id: oldChildId,
+			status: "delegated" as const,
+			awaitingChildId: grandchildId,
+			delegatedToId: grandchildId,
+		}
+		const grandchild = { ...parentHistoryItem, id: grandchildId, status: "active" as const }
+		const taskHistoryStore = makeStoreStub({
+			get: vi.fn((id: string) => (id === oldChildId ? child : id === grandchildId ? grandchild : parent)),
+		})
+		const provider = {
+			taskRegistry: { hasRunning: vi.fn().mockReturnValue(false) },
+			taskHistoryStore,
+		} as unknown as ClineProvider
+		const otherProvider = {
+			taskRegistry: { hasRunning: vi.fn((id: string) => id === grandchildId) },
+		} as unknown as ClineProvider
+		const activeInstances = Reflect.get(ClineProvider, "activeInstances")
+		if (!(activeInstances instanceof Set)) throw new Error("ClineProvider active instance registry unavailable")
+		activeInstances.add(otherProvider)
+		Object.assign(provider, {
+			isTaskRunningInAnyProvider: ClineProvider.prototype["isTaskRunningInAnyProvider"],
+			refreshDelegationChain: ClineProvider.prototype["refreshDelegationChain"],
+		})
+
+		try {
+			const result = await ClineProvider.prototype["recoverDeadAwaitedChild"].call(provider, parent, oldChildId)
+			expect(result).toBe(child)
+			expect(taskHistoryStore.atomicReadAndUpdate).not.toHaveBeenCalled()
+		} finally {
+			activeInstances.delete(otherProvider)
+		}
+	})
+
+	it("uses refreshed delegation records when deciding recovery", async () => {
+		const oldChildId = "old-child"
+		const grandchildId = "grandchild"
+		const parent = {
+			...parentHistoryItem,
+			status: "delegated" as const,
+			awaitingChildId: oldChildId,
+			delegatedToId: oldChildId,
+		}
+		const refreshedChild = {
+			...parentHistoryItem,
+			id: oldChildId,
+			status: "delegated" as const,
+			awaitingChildId: grandchildId,
+			delegatedToId: grandchildId,
+		}
+		const refreshedGrandchild = { ...parentHistoryItem, id: grandchildId, status: "interrupted" as const }
+		const cache = new Map<string, HistoryItem>([[oldChildId, { ...refreshedChild, status: "active" }]])
+		const taskHistoryStore = makeStoreStub({
+			get: vi.fn((id: string) => cache.get(id)),
+			atomicReadAndUpdate: vi.fn(async (id: string, updater: (item: HistoryItem) => HistoryItem) => {
+				cache.set(id, updater(cache.get(id)!))
+				return []
+			}),
+		})
+		taskHistoryStore.invalidate.mockImplementation(async (id: string) => {
+			if (id === oldChildId) cache.set(id, refreshedChild)
+			if (id === grandchildId) cache.set(id, refreshedGrandchild)
+		})
+		const provider = {
+			taskRegistry: { hasRunning: vi.fn().mockReturnValue(false) },
+			taskHistoryStore,
+			log: vi.fn(),
+		} as unknown as ClineProvider
+		Object.assign(provider, {
+			isTaskRunningInAnyProvider: ClineProvider.prototype["isTaskRunningInAnyProvider"],
+			refreshDelegationChain: ClineProvider.prototype["refreshDelegationChain"],
+		})
+
+		await ClineProvider.prototype["recoverDeadAwaitedChild"].call(provider, parent, oldChildId)
+
+		expect(taskHistoryStore.invalidate).toHaveBeenCalledWith(oldChildId)
+		expect(taskHistoryStore.invalidate).toHaveBeenCalledWith(grandchildId)
+		expect(cache.get(oldChildId)).toMatchObject({ status: "interrupted", awaitingChildId: undefined })
+	})
+
+	it("rejects a missing awaited-child record without creating a child", async () => {
+		const oldChildId = "missing-child"
+		const parent = {
+			...parentHistoryItem,
+			status: "delegated" as const,
+			awaitingChildId: oldChildId,
+			delegatedToId: oldChildId,
+		}
+		const taskHistoryStore = makeStoreStub({
+			get: vi.fn((id: string) => (id === "parent-1" ? parent : undefined)),
+		})
+		const provider = {
+			getCurrentTask: vi.fn(() => makeParentTask()),
+			createTask: vi.fn(),
+			taskHistoryStore,
+		} as unknown as ClineProvider
+
+		await expect(
+			ClineProvider.prototype.delegateParentAndOpenChild.call(provider, {
+				parentTaskId: "parent-1",
+				message: "Continue",
+				initialTodos: [],
+				mode: "code",
+			}),
+		).rejects.toThrow(`awaited child ${oldChildId} has status missing`)
+		expect(provider.createTask).not.toHaveBeenCalled()
+		expect(taskHistoryStore.atomicReadAndUpdate).not.toHaveBeenCalled()
+	})
+
+	it("does not create a child when the provider is disposed during recovery", async () => {
+		const oldChildId = "old-child"
+		const grandchildId = "grandchild"
+		const parentHistory = {
+			...parentHistoryItem,
+			status: "delegated" as const,
+			awaitingChildId: oldChildId,
+			delegatedToId: oldChildId,
+		}
+		const oldChild = {
+			...parentHistoryItem,
+			id: oldChildId,
+			status: "delegated" as const,
+			awaitingChildId: grandchildId,
+			delegatedToId: grandchildId,
+		}
+		const grandchild = { ...parentHistoryItem, id: grandchildId, status: "interrupted" as const }
+		const records = new Map<string, HistoryItem>([
+			["parent-1", parentHistory],
+			[oldChildId, oldChild],
+			[grandchildId, grandchild],
+		])
+		const taskHistoryStore = makeStoreStub({
+			get: vi.fn((id: string) => records.get(id)),
+			atomicReadAndUpdate: vi.fn(async (id: string, updater: (item: HistoryItem) => HistoryItem) => {
+				records.set(id, updater(records.get(id)!))
+				return []
+			}),
+		})
+		const parentTask = makeParentTask()
+		const provider = {
+			_disposed: false,
+			taskRegistry: { hasRunning: vi.fn().mockReturnValue(false) },
+			getCurrentTask: vi.fn(() => parentTask),
+			createTask: vi.fn(),
+			taskHistoryStore,
+			log: vi.fn(),
+		} as unknown as ClineProvider
+		taskHistoryStore.atomicReadAndUpdate.mockImplementation(
+			async (id: string, updater: (item: HistoryItem) => HistoryItem) => {
+				records.set(id, updater(records.get(id)!))
+				Reflect.set(provider, "_disposed", true)
+				return []
+			},
+		)
+		Object.assign(provider, {
+			isTaskRunningInAnyProvider: ClineProvider.prototype["isTaskRunningInAnyProvider"],
+			refreshDelegationChain: ClineProvider.prototype["refreshDelegationChain"],
+			recoverDeadAwaitedChild: ClineProvider.prototype["recoverDeadAwaitedChild"],
+		})
+
+		await expect(
+			ClineProvider.prototype.delegateParentAndOpenChild.call(provider, {
+				parentTaskId: "parent-1",
+				message: "Continue",
+				initialTodos: [],
+				mode: "code",
+			}),
+		).rejects.toThrow("Provider was disposed during delegation")
+		expect(provider.createTask).not.toHaveBeenCalled()
+	})
+
+	it("does not create a child when the parent is cancelled during recovery", async () => {
+		const oldChildId = "old-child"
+		const grandchildId = "grandchild"
+		const parentHistory = {
+			...parentHistoryItem,
+			status: "delegated" as const,
+			awaitingChildId: oldChildId,
+			delegatedToId: oldChildId,
+		}
+		const oldChild = {
+			...parentHistoryItem,
+			id: oldChildId,
+			status: "delegated" as const,
+			awaitingChildId: grandchildId,
+			delegatedToId: grandchildId,
+		}
+		const grandchild = { ...parentHistoryItem, id: grandchildId, status: "interrupted" as const }
+		const records = new Map<string, HistoryItem>([
+			["parent-1", parentHistory],
+			[oldChildId, oldChild],
+			[grandchildId, grandchild],
+		])
+		const taskHistoryStore = makeStoreStub({ get: vi.fn((id: string) => records.get(id)) })
+		const parentTask = makeParentTask()
+		const provider = {
+			_disposed: false,
+			taskRegistry: { hasRunning: vi.fn().mockReturnValue(false) },
+			getCurrentTask: vi.fn(() => parentTask),
+			createTask: vi.fn(),
+			taskHistoryStore,
+			log: vi.fn(),
+		} as unknown as ClineProvider
+		taskHistoryStore.atomicReadAndUpdate.mockImplementation(
+			async (id: string, updater: (item: HistoryItem) => HistoryItem) => {
+				records.set(id, updater(records.get(id)!))
+				parentTask.abort = true
+				return []
+			},
+		)
+		Object.assign(provider, {
+			isTaskRunningInAnyProvider: ClineProvider.prototype["isTaskRunningInAnyProvider"],
+			refreshDelegationChain: ClineProvider.prototype["refreshDelegationChain"],
+			recoverDeadAwaitedChild: ClineProvider.prototype["recoverDeadAwaitedChild"],
+		})
+
+		await expect(
+			ClineProvider.prototype.delegateParentAndOpenChild.call(provider, {
+				parentTaskId: "parent-1",
+				message: "Continue",
+				initialTodos: [],
+				mode: "code",
+			}),
+		).rejects.toThrow("Parent parent-1 was cancelled during delegation")
 		expect(provider.createTask).not.toHaveBeenCalled()
 	})
 

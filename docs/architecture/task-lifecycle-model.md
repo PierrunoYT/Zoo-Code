@@ -46,7 +46,7 @@ TLA+/PlusCal or Quint with TLC becomes a better fit when the lifecycle needs tem
 | Atomic event step         | `atomicReadAndUpdate`, `atomicUpdatePair`, and per-parent delegation transition lock |
 | Event interleaving        | Competing completion, cancellation, abandonment, and new delegation calls            |
 
-The model has three fixed task slots, enough to cover competing siblings and a nested parent-child-grandchild chain. It explores every reachable interleaving through depth 12, deduplicating canonical states. Representative checks also exercise rejected operations that do not create a new state: a second concurrent delegation while the first child is active, stale completion after re-delegation, late completion after abandonment, completion after interruption, and nested completion. Named semantic landmarks require the graph to retain interrupted-child re-delegation, nested delegation, and recovery of a dead nested chain even when the raw state total changes. The recovery action represents a delegated intermediate task with no live runtime owner whose awaited chain terminates in an interrupted child.
+The model has three fixed task slots, enough to cover competing siblings and a nested parent-child-grandchild chain. It explores every reachable interleaving through depth 12, deduplicating canonical states. Runtime ownership is modeled separately from persisted status: an `owner-loss` fault can remove the live owner of an active or delegated child without changing its history record, matching process termination or session skip. Recovery is enabled only when the awaited delegation chain has no live owner and ends in an interrupted/completed task or a missing awaited record. Representative checks also exercise rejected operations that do not create a new state: a second concurrent delegation while the first child is active, stale completion after re-delegation, late completion after abandonment, completion after interruption, and nested completion. Named semantic landmarks require the graph to retain interrupted-child re-delegation, nested delegation, delegated owner loss, and dead-chain recovery even when the raw state total changes.
 
 Production completion also accepts a recovery-compatible `active` parent that still awaits the returning child, then clears the stale pointers. Normal model transitions never create that intermediate state, so it is covered by a focused reducer test rather than admitted as a generally valid reachable state.
 
@@ -115,6 +115,7 @@ The task delegation checker currently enforces:
 5. Parent-child lineage is acyclic.
 6. Completed task records cannot be changed by later lifecycle events.
 7. Active-child re-delegation, stale completion after ownership moves to another child, duplicate/late completion, and abandonment of a live child are rejected by the shared production guards. A delegated child may transition to `interrupted` only through dead-chain recovery after runtime liveness checks establish that neither it nor its descendants has a live owner.
+8. Runtime owner loss does not mutate persisted status. A delegated chain with no remaining live owner has a reachable recovery transition within the bounded graph, after which its parent can re-delegate.
 
 The completion persistence checker additionally enforces:
 

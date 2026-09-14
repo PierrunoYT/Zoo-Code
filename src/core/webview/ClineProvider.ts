@@ -3948,6 +3948,15 @@ export class ClineProvider
 				)
 			}
 		}
+		if (this._disposed) {
+			throw new Error("[delegateParentAndOpenChild] Provider was disposed during delegation")
+		}
+		if (parent.abort || parent.abandoned) {
+			throw new Error(`[delegateParentAndOpenChild] Parent ${parent.taskId} was cancelled during delegation`)
+		}
+		if (this.getCurrentTask() !== parent) {
+			throw new Error(`[delegateParentAndOpenChild] Parent ${parent.taskId} is no longer current`)
+		}
 		if (pendingActionId) {
 			const parentHistory = this.taskHistoryStore.get(parentTaskId)
 			if (parentHistory?.pendingAction?.actionId !== pendingActionId) {
@@ -4026,6 +4035,16 @@ export class ClineProvider
 			)
 		}
 
+		if (this._disposed) {
+			throw new Error("[delegateParentAndOpenChild] Provider was disposed during delegation")
+		}
+		if (parent.abort || parent.abandoned) {
+			throw new Error(`[delegateParentAndOpenChild] Parent ${parent.taskId} was cancelled during delegation`)
+		}
+		if (this.getCurrentTask() !== parent) {
+			throw new Error(`[delegateParentAndOpenChild] Parent ${parent.taskId} is no longer current`)
+		}
+
 		// 3) Enforce single-open invariant by closing/disposing the parent first
 		//    This ensures we never have >1 tasks open at any time during delegation.
 		//    Await abort completion to ensure clean disposal and prevent unhandled rejections.
@@ -4038,6 +4057,10 @@ export class ClineProvider
 				}`,
 			)
 			// Non-fatal: proceed with child creation even if parent cleanup had issues
+		}
+
+		if (this._disposed) {
+			throw new Error("[delegateParentAndOpenChild] Provider was disposed during parent cleanup")
 		}
 
 		// 4) Bind the child directly to the delegating task's local provider
@@ -4074,6 +4097,9 @@ export class ClineProvider
 		//    slip between the status snapshot and the write. An active child must never be
 		//    silently detached.
 		try {
+			if (this._disposed) {
+				throw new Error("[delegateParentAndOpenChild] Provider was disposed before delegation commit")
+			}
 			await this.taskHistoryStore.atomicReadAndUpdate(parentTaskId, (historyItem) => {
 				if (pendingActionId && historyItem.pendingAction?.actionId !== pendingActionId) {
 					throw new Error(
@@ -4090,6 +4116,9 @@ export class ClineProvider
 						delegated.pendingAction?.actionId === pendingActionId ? undefined : delegated.pendingAction,
 				}
 			})
+			if (this._disposed) {
+				throw new Error("[delegateParentAndOpenChild] Provider was disposed before child scheduling")
+			}
 			this.recentTasksCache = undefined
 			if (this.isViewLaunched) {
 				const updatedItem = this.taskHistoryStore.get(parentTaskId)
