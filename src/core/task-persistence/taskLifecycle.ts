@@ -72,7 +72,7 @@ export function isDeadDelegationChain(
 
 	const visited = new Set<string>()
 	let current: HistoryItem | undefined = child
-	while (current) {
+	while (true) {
 		if (visited.has(current.id) || isTaskLive(current.id)) return false
 		visited.add(current.id)
 		if (current.status === "interrupted" || current.status === "completed") return true
@@ -81,8 +81,6 @@ export function isDeadDelegationChain(
 		current = getTask(current.awaitingChildId)
 		if (!current) return true
 	}
-
-	return true
 }
 
 /**
