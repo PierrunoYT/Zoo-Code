@@ -53,10 +53,18 @@ describe("ClineProvider historical workspace selection", () => {
 
 	it("opens the original workspace in a new window without restoring the task", async () => {
 		const provider = createProvider("/current/workspace")
-		vi.spyOn(vscode.window, "showWarningMessage").mockResolvedValue({ title: "Open Original Workspace" })
+		const prompt = vi
+			.spyOn(vscode.window, "showWarningMessage")
+			.mockResolvedValue({ title: "Open Original Workspace" })
 		const executeCommand = vi.spyOn(vscode.commands, "executeCommand").mockResolvedValue(undefined)
 
 		await expect(provider.prepareHistoryItemForResume(historyItem("/old/worktree"))).resolves.toBeUndefined()
+		expect(prompt).toHaveBeenCalledWith(
+			expect.any(String),
+			{ modal: true },
+			{ title: "Use Current Workspace" },
+			{ title: "Open Original Workspace" },
+		)
 		expect(executeCommand).toHaveBeenCalledWith(
 			"vscode.openFolder",
 			expect.objectContaining({ fsPath: "/old/worktree" }),
@@ -75,8 +83,10 @@ describe("ClineProvider historical workspace selection", () => {
 			...item,
 			workspace: "/current/workspace",
 		})
-		expect(provider["resetTaskCheckpointsForWorkspaceChange"]).toHaveBeenCalledWith(item.id)
-		expect(provider.updateTaskHistory).toHaveBeenCalledWith({ ...item, workspace: "/current/workspace" })
+		expect(provider["resetTaskCheckpointsForWorkspaceChange"]).toHaveBeenCalledWith(item, {
+			...item,
+			workspace: "/current/workspace",
+		})
 	})
 
 	it("restores history with the workspace selected by the mismatch prompt", async () => {
@@ -98,6 +108,21 @@ describe("ClineProvider historical workspace selection", () => {
 		})
 	})
 
+	it("does not restore or reveal a task when workspace selection is cancelled", async () => {
+		const provider = createProvider("/current/workspace")
+		const original = historyItem("/old/worktree")
+		provider.getCurrentTask = vi.fn().mockReturnValue(undefined)
+		provider.getTaskWithId = vi.fn().mockResolvedValue({ historyItem: original })
+		provider.prepareHistoryItemForResume = vi.fn().mockResolvedValue(undefined)
+		provider.createTaskWithHistoryItem = vi.fn()
+		provider.postMessageToWebview = vi.fn()
+
+		await provider.showTaskWithId(original.id)
+
+		expect(provider.createTaskWithHistoryItem).not.toHaveBeenCalled()
+		expect(provider.postMessageToWebview).not.toHaveBeenCalled()
+	})
+
 	it("removes the old checkpoint repository and checkpoint-only chat rows", async () => {
 		const storagePath = await fs.mkdtemp(path.join(os.tmpdir(), "zoo-history-workspace-"))
 		const taskDir = path.join(storagePath, "tasks", "task-1602")
@@ -117,9 +142,13 @@ describe("ClineProvider historical workspace selection", () => {
 		Object.defineProperty(provider, "contextProxy", {
 			value: { globalStorageUri: { fsPath: storagePath } },
 		})
+		const original = historyItem("/old/worktree")
+		const updated = { ...original, workspace: "/current/workspace" }
+		provider.updateTaskHistory = vi.fn().mockResolvedValue([])
+		Object.defineProperty(provider, "taskHistoryStore", { value: { get: vi.fn().mockReturnValue(original) } })
 
 		try {
-			await provider["resetTaskCheckpointsForWorkspaceChange"]("task-1602")
+			await provider["resetTaskCheckpointsForWorkspaceChange"](original, updated)
 
 			await expect(fs.stat(checkpointsDir)).rejects.toMatchObject({ code: "ENOENT" })
 			const messages = JSON.parse(await fs.readFile(path.join(taskDir, "ui_messages.json"), "utf8"))
@@ -127,6 +156,40 @@ describe("ClineProvider historical workspace selection", () => {
 				{ type: "say", say: "task", text: "Continue" },
 				{ type: "say", say: "text", text: "Still useful" },
 			])
+			expect(provider.updateTaskHistory).toHaveBeenCalledWith(updated)
+		} finally {
+			await fs.rm(storagePath, { recursive: true, force: true })
+		}
+	})
+
+	it("restores checkpoint files and messages when workspace persistence fails", async () => {
+		const storagePath = await fs.mkdtemp(path.join(os.tmpdir(), "zoo-history-workspace-rollback-"))
+		const taskDir = path.join(storagePath, "tasks", "task-1602")
+		const checkpointsDir = path.join(taskDir, "checkpoints")
+		const messagesPath = path.join(taskDir, "ui_messages.json")
+		const originalMessages = [
+			{ type: "say", say: "task", ts: 1, text: "Continue" },
+			{ type: "say", say: "checkpoint_saved", ts: 2, text: "old-hash" },
+		]
+		await fs.mkdir(checkpointsDir, { recursive: true })
+		await fs.writeFile(path.join(checkpointsDir, "HEAD"), "old checkpoint")
+		await fs.writeFile(messagesPath, JSON.stringify(originalMessages))
+
+		const provider = createProvider("/current/workspace")
+		const original = historyItem("/old/worktree")
+		const updated = { ...original, workspace: "/current/workspace" }
+		Object.defineProperty(provider, "contextProxy", {
+			value: { globalStorageUri: { fsPath: storagePath } },
+		})
+		Object.defineProperty(provider, "taskHistoryStore", { value: { get: vi.fn().mockReturnValue(original) } })
+		provider.updateTaskHistory = vi.fn().mockRejectedValue(new Error("history write failed"))
+
+		try {
+			await expect(provider["resetTaskCheckpointsForWorkspaceChange"](original, updated)).rejects.toThrow(
+				"history write failed",
+			)
+			await expect(fs.readFile(path.join(checkpointsDir, "HEAD"), "utf8")).resolves.toBe("old checkpoint")
+			expect(JSON.parse(await fs.readFile(messagesPath, "utf8"))).toMatchObject(originalMessages)
 		} finally {
 			await fs.rm(storagePath, { recursive: true, force: true })
 		}
