@@ -498,7 +498,8 @@ describe("ChatView - Tool Batching Tests", () => {
 
 			expect(textRows).toHaveLength(1)
 			expect(toolRows).toHaveLength(1)
-			expect(toolRows[0]?.text).toContain('"batchFiles"')
+			const toolPayload = JSON.parse(toolRows[0]?.text ?? "{}") as { batchFiles?: Array<{ path?: string }> }
+			expect(toolPayload.batchFiles?.map(({ path }) => path)).toEqual(["a.ts", "b.ts"])
 		})
 	})
 })

@@ -134,6 +134,36 @@ describe("batchNearby", () => {
 		expect(result).toEqual(messages)
 	})
 
+	test("restores a repeated preamble when no later target is found", () => {
+		const preamble = "I'll read the files now."
+		const messages = [
+			msg(preamble, "say", "text"),
+			msg("match-1", "ask"),
+			msg(preamble, "say", "text"),
+			msg("different tool", "ask"),
+		]
+		const result = batchNearby(messages, {
+			isTarget: isMatch,
+			isIgnorableBetweenTargets,
+			isBoundary,
+			synthesize: synthesizeBatch,
+		})
+
+		expect(result).toEqual(messages)
+	})
+
+	test("an item matching target and boundary stops the current batch", () => {
+		const messages = [msg("match-1", "ask"), msg("match-boundary", "ask"), msg("match-2", "ask")]
+		const result = batchNearby(messages, {
+			isTarget: isMatch,
+			isIgnorableBetweenTargets: () => false,
+			isBoundary: (item) => item.text === "match-boundary",
+			synthesize: synthesizeBatch,
+		})
+
+		expect(result).toEqual(messages)
+	})
+
 	test("boundary message stops batching", () => {
 		const messages = [msg("match-1", "ask"), msg("visible text", "say", "text"), msg("match-2", "ask")]
 		const result = batchNearby(messages, {

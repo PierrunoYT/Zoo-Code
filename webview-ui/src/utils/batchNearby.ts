@@ -53,14 +53,14 @@ export function batchNearby<T>(items: T[], options: BatchNearbyOptions<T>): T[] 
 			}
 
 			while (j < items.length) {
-				if (isTarget(items[j])) {
+				if (isBoundary(items[j]) && !isIgnorableBetweenTargets(items[j], batchContext)) {
+					break // boundary stops the batch
+				} else if (isTarget(items[j])) {
 					batch.push(items[j])
 					j++
 				} else if (isIgnorableBetweenTargets(items[j], batchContext)) {
 					pendingIgnorable.push(items[j]) // track but don't commit yet
 					j++
-				} else if (isBoundary(items[j])) {
-					break // boundary stops the batch
 				} else {
 					break // non-ignorable, non-target message stops the batch
 				}
