@@ -64,7 +64,7 @@ interface DelegationRepairIntent {
 	}
 	target: {
 		childStatus: "interrupted"
-		parentStatus: "active"
+		parentStatus: "active" | "interrupted"
 	}
 }
 
@@ -502,9 +502,12 @@ export class TaskHistoryStore {
 						// behind it. Mark it interrupted before releasing the parent's delegation
 						// link so the normal resume/re-delegate flow can take over. This is an
 						// administrative recovery, not a runtime delegation transition.
-						await this.repairActiveDelegation(item, child)
+						const ancestor = item.parentTaskId ? byId.get(item.parentTaskId) : undefined
+						const preserveAncestorDelegation =
+							ancestor?.status === "delegated" && ancestor.awaitingChildId === item.id
+						await this.repairActiveDelegation(item, child, preserveAncestorDelegation ? "interrupted" : "active")
 						console.warn(
-							`[TaskHistoryStore] Reconciled orphaned active child: child ${child.id} → interrupted, task ${item.id} → active`,
+							`[TaskHistoryStore] Reconciled orphaned active child: child ${child.id} → interrupted, task ${item.id} → ${preserveAncestorDelegation ? "interrupted" : "active"}`,
 						)
 						repairsInThisPass++
 					} else if (child.status === "completed") {
@@ -609,7 +612,11 @@ export class TaskHistoryStore {
 	 * Start and complete a guarded active-child repair while already holding the
 	 * store lock. The intent is durable before either task file is touched.
 	 */
-	private async repairActiveDelegation(parent: HistoryItem, child: HistoryItem): Promise<void> {
+	private async repairActiveDelegation(
+		parent: HistoryItem,
+		child: HistoryItem,
+		parentStatus: "active" | "interrupted",
+	): Promise<void> {
 		const intent: DelegationRepairIntent = {
 			version: 1,
 			operationId: crypto.randomUUID(),
@@ -627,7 +634,7 @@ export class TaskHistoryStore {
 					rootTaskId: child.rootTaskId,
 				},
 			},
-			target: { childStatus: "interrupted", parentStatus: "active" },
+			target: { childStatus: "interrupted", parentStatus },
 		}
 
 		await this.writeDelegationRepairIntent(intent)

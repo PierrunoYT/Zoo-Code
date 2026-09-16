@@ -8,6 +8,7 @@ import type { HistoryItem } from "@roo-code/types"
 
 import { GlobalFileNames } from "../../../shared/globalFileNames"
 import { TaskHistoryStore, assertValidTransition } from "../TaskHistoryStore"
+import { delegateTaskToChild } from "../taskLifecycle"
 
 vi.mock("../../../utils/storage", () => ({
 	getStorageBasePath: vi.fn().mockImplementation((defaultPath: string) => defaultPath),
@@ -708,6 +709,66 @@ describe("TaskHistoryStore reconcileDelegationState", () => {
 			delegatedToId: undefined,
 		})
 		expect(store.get(grandchild.id)?.status).toBe("interrupted")
+	})
+
+	it("preserves the grandparent delegation when a nested persisted-active child is recovered", async () => {
+		const grandparent = makeItem({
+			id: "persisted-active-grandparent",
+			status: "delegated",
+			awaitingChildId: "persisted-active-parent",
+			delegatedToId: "persisted-active-parent",
+			childIds: ["persisted-active-parent"],
+		})
+		const parent = makeItem({
+			id: "persisted-active-parent",
+			status: "delegated",
+			parentTaskId: grandparent.id,
+			rootTaskId: grandparent.id,
+			awaitingChildId: "persisted-active-child",
+			delegatedToId: "persisted-active-child",
+			childIds: ["persisted-active-child"],
+		})
+		const child = makeItem({
+			id: "persisted-active-child",
+			status: "active",
+			parentTaskId: parent.id,
+			rootTaskId: grandparent.id,
+		})
+		// Seed the intermediate parent first to exercise recovery before the
+		// grandparent is visited in the reconciliation pass.
+		await seedItems([parent, grandparent, child])
+
+		await store.initialize()
+
+		const recoveredGrandparent = store.get(grandparent.id)!
+		expect(recoveredGrandparent).toMatchObject({
+			status: "delegated",
+			awaitingChildId: parent.id,
+			delegatedToId: parent.id,
+		})
+		expect(store.get(parent.id)).toMatchObject({
+			status: "interrupted",
+			awaitingChildId: undefined,
+			delegatedToId: undefined,
+		})
+		expect(store.get(child.id)?.status).toBe("interrupted")
+
+		store.dispose()
+		const subsequentStore = registerStore(new TaskHistoryStore(tmpDir))
+		await subsequentStore.initialize()
+		const subsequentlyRecoveredGrandparent = subsequentStore.get(grandparent.id)!
+		expect(subsequentlyRecoveredGrandparent).toMatchObject({
+			status: "delegated",
+			awaitingChildId: parent.id,
+			delegatedToId: parent.id,
+		})
+
+		const redelegated = delegateTaskToChild(subsequentlyRecoveredGrandparent, "replacement-child", "interrupted")
+		expect(redelegated).toMatchObject({
+			status: "delegated",
+			awaitingChildId: "replacement-child",
+			delegatedToId: "replacement-child",
+		})
 	})
 
 	it("preserves a dead-looking delegated chain with a live runtime owner", async () => {
