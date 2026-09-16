@@ -226,6 +226,19 @@ describe("opencode-go registry", () => {
 				},
 			},
 			{
+				id: "deepseek-v4.1-flash",
+				expected: {
+					maxTokens: 384_000,
+					contextWindow: 1_000_000,
+					supportsImages: true,
+					supportsPromptCache: true,
+					supportsMaxTokens: true,
+					inputPrice: 0.3,
+					outputPrice: 1.2,
+					cacheReadsPrice: 0.006,
+				},
+			},
+			{
 				id: "longcat-2.0",
 				expected: {
 					maxTokens: 131_072,

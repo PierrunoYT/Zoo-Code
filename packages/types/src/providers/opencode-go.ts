@@ -468,7 +468,7 @@ export const opencodeGoModels: Record<string, ModelInfo> = {
 	"deepseek-v4.1-flash": {
 		maxTokens: 384_000,
 		contextWindow: 1_000_000,
-		supportsImages: false,
+		supportsImages: true,
 		supportsPromptCache: true,
 		supportsMaxTokens: true,
 		supportsReasoningEffort: ["disable", "low", "medium", "high", "xhigh"],
