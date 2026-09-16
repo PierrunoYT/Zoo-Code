@@ -71,11 +71,17 @@ export const usePromptHistory = ({
 
 	// Update prompt history when filtered history changes and reset navigation
 	useEffect(() => {
+		const historyChanged =
+			promptHistory.length !== filteredPromptHistory.length ||
+			promptHistory.some((prompt, index) => prompt !== filteredPromptHistory[index])
+
+		if (!historyChanged) return
+
 		setPromptHistory(filteredPromptHistory)
 		// Reset navigation state when switching between history sources
 		setHistoryIndex(-1)
 		setTempInput("")
-	}, [filteredPromptHistory])
+	}, [filteredPromptHistory, promptHistory])
 
 	// Reset history navigation when user types (but not when we're setting it programmatically)
 	const resetOnInputChange = useCallback(() => {
