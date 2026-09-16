@@ -170,6 +170,7 @@ describe("Opencode Go Fetchers", () => {
 				"glm-5",
 				"deepseek-v4-pro",
 				"deepseek-v4-flash",
+				"deepseek-v4.1-flash",
 				"deepseek-v4-flash-vision-exp",
 				"qwen3.7-max",
 				"qwen3.8-max",
@@ -227,6 +228,15 @@ describe("Opencode Go Fetchers", () => {
 			expect(info.maxTokens).toBe(native.maxTokens)
 			expect(info.supportsPromptCache).toBe(true)
 			expect(info.preserveReasoning).toBe(true)
+			expect(info.supportsReasoningEffort).toEqual(["disable", "low", "medium", "high", "xhigh"])
+		})
+
+		it("resolves DeepSeek V4.1 Flash to its 1M context when live metadata is absent", () => {
+			const info = parseOpencodeGoModel({ id: "deepseek-v4.1-flash" })
+			expect(info.contextWindow).toBe(1_000_000)
+			expect(info.maxTokens).toBe(384_000)
+			expect(info.supportsPromptCache).toBe(true)
+			expect(info.supportsMaxTokens).toBe(true)
 			expect(info.supportsReasoningEffort).toEqual(["disable", "low", "medium", "high", "xhigh"])
 		})
 
