@@ -181,6 +181,31 @@ describe("OpenAiHandler with usage tracking fix", () => {
 			})
 		})
 
+		it("should report OpenAI-compatible cached prompt tokens", async () => {
+			mockCreate.mockImplementationOnce(async () =>
+				asyncStreamFrom([
+					{
+						choices: [{ delta: { content: "Cached response" }, index: 0 }],
+						usage: {
+							prompt_tokens: 5_053,
+							completion_tokens: 16,
+							total_tokens: 5_069,
+							prompt_tokens_details: { cached_tokens: 4_864 },
+						},
+					},
+				]),
+			)
+
+			const chunks = await collectStream(handler.createMessage(systemPrompt, messages))
+
+			expect(chunks).toContainEqual({
+				type: "usage",
+				inputTokens: 5_053,
+				outputTokens: 16,
+				cacheReadTokens: 4_864,
+			})
+		})
+
 		it("should handle case where no usage is provided", async () => {
 			// Override the mock for this specific test
 			mockCreate.mockImplementationOnce(async (options) => {
@@ -210,6 +235,29 @@ describe("OpenAiHandler with usage tracking fix", () => {
 			// Check we don't have any usage chunks
 			const usageChunks = chunks.filter((chunk) => chunk.type === "usage")
 			expect(usageChunks).toHaveLength(0)
+		})
+	})
+
+	it("should report cached prompt tokens from a non-streaming response", async () => {
+		const nonStreamingHandler = new OpenAiHandler({ ...mockOptions, openAiStreamingEnabled: false })
+		mockCreate.mockImplementationOnce(async () => ({
+			id: "test-completion",
+			choices: [{ message: { role: "assistant", content: "Cached response" } }],
+			usage: {
+				prompt_tokens: 4_621,
+				completion_tokens: 16,
+				total_tokens: 4_637,
+				prompt_tokens_details: { cached_tokens: 4_608 },
+			},
+		}))
+
+		const chunks = await collectStream(nonStreamingHandler.createMessage("system prompt", []))
+
+		expect(chunks).toContainEqual({
+			type: "usage",
+			inputTokens: 4_621,
+			outputTokens: 16,
+			cacheReadTokens: 4_608,
 		})
 	})
 })

@@ -282,12 +282,14 @@ export class OpenAiHandler extends BaseProvider implements SingleCompletionHandl
 	}
 
 	protected processUsageMetrics(usage: any, _modelInfo?: ModelInfo): ApiStreamUsageChunk {
+		const cacheReadTokens = usage?.cache_read_input_tokens ?? usage?.prompt_tokens_details?.cached_tokens
+
 		return {
 			type: "usage",
 			inputTokens: usage?.prompt_tokens || 0,
 			outputTokens: usage?.completion_tokens || 0,
 			cacheWriteTokens: usage?.cache_creation_input_tokens || undefined,
-			cacheReadTokens: usage?.cache_read_input_tokens || undefined,
+			cacheReadTokens: cacheReadTokens || undefined,
 		}
 	}
 
