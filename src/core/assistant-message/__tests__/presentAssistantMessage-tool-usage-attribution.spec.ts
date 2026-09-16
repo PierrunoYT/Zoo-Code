@@ -76,7 +76,6 @@ interface MockTask {
 	say: ReturnType<typeof vi.fn>
 	ask: ReturnType<typeof vi.fn>
 	pushToolResultToUserContent: ReturnType<typeof vi.fn>
-	getTaskMode: ReturnType<typeof vi.fn>
 }
 
 describe("presentAssistantMessage - tool usage attribution", () => {
@@ -120,7 +119,6 @@ describe("presentAssistantMessage - tool usage attribution", () => {
 			say: vi.fn().mockResolvedValue(undefined),
 			ask: vi.fn().mockResolvedValue({ response: "yesButtonClicked" }),
 			pushToolResultToUserContent: vi.fn(),
-			getTaskMode: vi.fn().mockResolvedValue("code"),
 		}
 
 		mockTask.pushToolResultToUserContent = vi

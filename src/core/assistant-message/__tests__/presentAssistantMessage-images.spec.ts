@@ -58,7 +58,6 @@ describe("presentAssistantMessage - Image Handling in Native Tool Calling", () =
 					}),
 				}),
 			},
-			getTaskMode: vi.fn().mockResolvedValue("code"),
 			say: vi.fn().mockResolvedValue(undefined),
 			ask: vi.fn().mockResolvedValue({ response: "yesButtonClicked" }),
 		}
