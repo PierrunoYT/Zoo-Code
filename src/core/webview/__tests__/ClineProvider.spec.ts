@@ -4963,7 +4963,15 @@ describe("ClineProvider - Comprehensive Edit/Delete Edge Cases", () => {
 
 	describe("getTaskWithId", () => {
 		it("does not restore a deleted file-backed task from legacy history", async () => {
-			const historyItem = { id: "deleted-task", task: "legacy task", ts: Date.now() }
+			const historyItem = {
+				id: "deleted-task",
+				task: "legacy task",
+				ts: Date.now(),
+				number: 1,
+				tokensIn: 0,
+				tokensOut: 0,
+				totalCost: 0,
+			}
 			vi.mocked(mockContext.globalState.get).mockImplementation((key: string) => {
 				if (key === "taskHistory") {
 					return [historyItem]
