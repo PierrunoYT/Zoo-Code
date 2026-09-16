@@ -26,6 +26,61 @@ describe("convertToBedrockConverseMessages", () => {
 		])
 	})
 
+	it("converts internal reasoning blocks to Bedrock reasoning content", () => {
+		// The Anthropic SDK does not model Zoo Code's internal reasoning block,
+		// though this converter receives it from persisted conversation history.
+		const messages = [
+			{
+				role: "assistant",
+				content: [{ type: "reasoning", text: "I should inspect the file first.", summary: [] }],
+			},
+		] as unknown as Anthropic.Messages.MessageParam[]
+
+		expect(convertToBedrockConverseMessages(messages)).toEqual([
+			{
+				role: "assistant",
+				content: [
+					{
+						reasoningContent: {
+							reasoningText: { text: "I should inspect the file first." },
+						},
+					},
+				],
+			},
+		])
+	})
+
+	it("converts signed thinking blocks to Bedrock reasoning content", () => {
+		const messages: Anthropic.Messages.MessageParam[] = [
+			{
+				role: "assistant",
+				content: [
+					{
+						type: "thinking",
+						thinking: "I should inspect the file first.",
+						signature: "signed-reasoning",
+					},
+				],
+			},
+		]
+
+		expect(convertToBedrockConverseMessages(messages)).toEqual([
+			{
+				role: "assistant",
+				content: [
+					{
+						reasoningContent: {
+							reasoningText: {
+								text: "I should inspect the file first.",
+								signature: "signed-reasoning",
+							},
+						},
+					},
+				],
+			},
+		])
+	})
+
 	it("converts messages with images correctly", () => {
 		const messages: Anthropic.Messages.MessageParam[] = [
 			{
