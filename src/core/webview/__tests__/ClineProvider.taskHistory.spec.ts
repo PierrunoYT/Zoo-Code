@@ -386,6 +386,10 @@ describe("ClineProvider Task History Synchronization", () => {
 		return calls.filter((call) => call[0]?.type === type)
 	}
 
+	it("uses per-task files without registering a globalState write-through callback", () => {
+		expect(provider.taskHistoryStore["onWrite"]).toBeUndefined()
+	})
+
 	describe("updateTaskHistory", () => {
 		it("broadcasts task history update by default", async () => {
 			await provider.resolveWebviewView(mockWebviewView)
