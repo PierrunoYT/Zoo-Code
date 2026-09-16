@@ -79,7 +79,8 @@ export function resolveAgentTimeoutMs(timeoutSeconds: number | null | undefined)
 async function commandWorkingDirectoryError(workingDirectory: string): Promise<string | undefined> {
 	try {
 		await fs.access(workingDirectory)
-		return undefined
+		const stats = await fs.stat(workingDirectory)
+		return stats.isDirectory() ? undefined : `Working directory '${workingDirectory}' is not a directory.`
 	} catch {
 		return `Working directory '${workingDirectory}' does not exist.`
 	}
