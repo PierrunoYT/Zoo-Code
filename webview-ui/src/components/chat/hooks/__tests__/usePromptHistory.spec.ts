@@ -18,13 +18,14 @@ describe("usePromptHistory", () => {
 				workspace: "/workspace",
 			},
 		]
-		const conversationHistory: ClineMessage[] = [
-			{ ts: 2, type: "say", say: "user_feedback", text: prompt },
-		]
+		const conversationHistory: ClineMessage[] = [{ ts: 2, type: "say", say: "user_feedback", text: prompt }]
 		const setInputValue = vi.fn()
 
-		const { result, rerender } = renderHook(
-			({ clineMessages }: { clineMessages: ClineMessage[] | undefined }) =>
+		const { result, rerender } = renderHook<
+			ReturnType<typeof usePromptHistory>,
+			{ clineMessages: ClineMessage[] | undefined }
+		>(
+			({ clineMessages }) =>
 				usePromptHistory({
 					clineMessages,
 					taskHistory,
