@@ -212,6 +212,8 @@ export async function getEnvironmentDetails(cline: Task, includeFileDetails: boo
 		language,
 	} = state ?? {}
 
+	// Read the task-local mode, not the shared provider mode.
+	// A delegated child task may run in a different mode than its parent.
 	const currentMode = await cline.getTaskMode()
 
 	const modeDetails = await getFullModeDetails(currentMode, customModes, customModePrompts, {
