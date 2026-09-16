@@ -98,7 +98,7 @@ import { SkillsManager } from "../../services/skills/SkillsManager"
 import { fileExistsAtPath } from "../../utils/fs"
 import { setTtsEnabled, setTtsSpeed } from "../../utils/tts"
 import { getWorkspaceGitInfo } from "../../utils/git"
-import { getWorkspacePath } from "../../utils/path"
+import { arePathsEqual, getWorkspacePath } from "../../utils/path"
 import { OrganizationAllowListViolationError } from "../../utils/errors"
 
 import { setPanel } from "../../activate/registerCommands"
@@ -2304,10 +2304,65 @@ export class ClineProvider
 		if (id !== this.getCurrentTask()?.taskId) {
 			// Non-current task.
 			const { historyItem } = await this.getTaskWithId(id)
-			await this.createTaskWithHistoryItem(historyItem) // Clears existing task.
+			const preparedHistoryItem = await this.prepareHistoryItemForResume(historyItem)
+			if (!preparedHistoryItem) {
+				return
+			}
+			await this.createTaskWithHistoryItem(preparedHistoryItem) // Clears existing task.
 		}
 
 		await this.postMessageToWebview({ type: "action", action: "chatButtonClicked" })
+	}
+
+	public async prepareHistoryItemForResume<T extends HistoryItem>(historyItem: T): Promise<T | undefined> {
+		const currentWorkspace = this.cwd
+		const originalWorkspace = historyItem.workspace
+
+		if (!currentWorkspace || !originalWorkspace || arePathsEqual(currentWorkspace, originalWorkspace)) {
+			return historyItem
+		}
+
+		const useCurrentWorkspace = { title: "Use Current Workspace" }
+		const openOriginalWorkspace = { title: "Open Original Workspace" }
+		const selection = await vscode.window.showWarningMessage(
+			`This conversation was created in "${originalWorkspace}", but the current workspace is "${currentWorkspace}". ` +
+				"Choose where to continue. Using the current workspace resets checkpoints created in the original workspace.",
+			{ modal: true },
+			useCurrentWorkspace,
+			openOriginalWorkspace,
+		)
+
+		if (selection?.title === openOriginalWorkspace.title) {
+			await vscode.commands.executeCommand("vscode.openFolder", vscode.Uri.file(originalWorkspace), {
+				forceNewWindow: true,
+			})
+			return undefined
+		}
+
+		if (selection?.title !== useCurrentWorkspace.title) {
+			return undefined
+		}
+
+		await this.resetTaskCheckpointsForWorkspaceChange(historyItem.id)
+		const updatedHistoryItem = { ...historyItem, workspace: currentWorkspace }
+		await this.updateTaskHistory(updatedHistoryItem)
+		return updatedHistoryItem
+	}
+
+	private async resetTaskCheckpointsForWorkspaceChange(taskId: string): Promise<void> {
+		const globalStoragePath = this.contextProxy.globalStorageUri.fsPath
+		const messages = await readTaskMessages({ taskId, globalStoragePath })
+		const messagesWithoutCheckpoints = messages.filter(
+			(message) => !(message.type === "say" && message.say === "checkpoint_saved"),
+		)
+		const { getTaskDirectoryPath } = await import("../../utils/storage")
+		const taskDir = await getTaskDirectoryPath(globalStoragePath, taskId)
+
+		await fs.rm(path.join(taskDir, "checkpoints"), { recursive: true, force: true })
+
+		if (messagesWithoutCheckpoints.length !== messages.length) {
+			await saveTaskMessages({ messages: messagesWithoutCheckpoints, taskId, globalStoragePath })
+		}
 	}
 
 	async exportTaskWithId(id: string) {
