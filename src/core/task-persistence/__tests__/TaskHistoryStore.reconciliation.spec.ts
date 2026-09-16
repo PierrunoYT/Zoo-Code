@@ -710,6 +710,33 @@ describe("TaskHistoryStore reconcileDelegationState", () => {
 		expect(store.get(grandchild.id)?.status).toBe("interrupted")
 	})
 
+	it("preserves a dead-looking delegated chain with a live runtime owner", async () => {
+		const parent = makeItem({
+			id: "owned-parent",
+			status: "delegated",
+			awaitingChildId: "owned-child",
+			delegatedToId: "owned-child",
+		})
+		const child = makeItem({
+			id: "owned-child",
+			status: "delegated",
+			parentTaskId: parent.id,
+			awaitingChildId: "owned-grandchild",
+			delegatedToId: "owned-grandchild",
+		})
+		const grandchild = makeItem({ id: "owned-grandchild", status: "interrupted", parentTaskId: child.id })
+		await seedItems([parent, child, grandchild])
+		store.dispose()
+		store = registerStore(new TaskHistoryStore(tmpDir, { isTaskOwned: (taskId) => taskId === grandchild.id }))
+
+		await store.initialize()
+
+		expect(store.get(child.id)).toMatchObject({
+			status: "delegated",
+			awaitingChildId: grandchild.id,
+		})
+	})
+
 	it("does not repair a grandparent when replay repairs the middle node", async () => {
 		const grandparent = makeItem({
 			id: "grandparent-replay-chain",

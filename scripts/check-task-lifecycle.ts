@@ -94,7 +94,7 @@ function transitions(state: ModelState): Transition[] {
 			const next = replace(state, delegated, task(childId, parentId))
 			result.push({
 				name: `delegate(${parentId}, ${childId})`,
-				next: withLiveTasks(next, ...state.liveTaskIds, childId),
+				next: withLiveTasks(next, ...state.liveTaskIds.filter((id) => id !== parentId), childId),
 			})
 		}
 	}

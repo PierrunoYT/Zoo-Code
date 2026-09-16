@@ -84,6 +84,13 @@ describe("task lifecycle transitions", () => {
 				(id) => id === child.id,
 			),
 		).toBe(false)
+		expect(
+			isDeadDelegationChain(
+				child,
+				(id) => tasks.get(id),
+				(id) => id === interrupted.id,
+			),
+		).toBe(false)
 		expect(isDeadDelegationChain({ ...child, status: "active" }, (id) => tasks.get(id))).toBe(false)
 		expect(isDeadDelegationChain({ ...child, awaitingChildId: "missing" }, (id) => tasks.get(id))).toBe(true)
 		expect(

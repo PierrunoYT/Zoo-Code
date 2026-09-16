@@ -20,6 +20,18 @@ import { computeHistoryDelta, DeltaRejectedError, mergeHistoryDelta } from "./ta
 export { assertValidTransition, type HistoryItemStatus } from "./taskLifecycle"
 export { DeltaRejectedError } from "./taskStoreConcurrency"
 
+let taskOwnershipReservation: Promise<void> = Promise.resolve()
+
+/** Serialize runtime task registration with dead-delegation recovery. */
+export function withTaskOwnershipReservation<T>(fn: () => Promise<T>): Promise<T> {
+	const result = taskOwnershipReservation.then(fn, fn)
+	taskOwnershipReservation = result.then(
+		() => undefined,
+		() => undefined,
+	)
+	return result
+}
+
 /**
  * Build a `safeWriteJson` merge callback that applies only `delta` to the
  * current disk state, preserving fields written by another process.
@@ -80,11 +92,14 @@ export interface TaskHistoryStoreOptions {
 	 * globalState during the transition period.
 	 */
 	onWrite?: (items: HistoryItem[]) => Promise<void>
+	/** Return whether any provider currently owns a live runtime task. */
+	isTaskOwned?: (taskId: string) => boolean
 }
 
 export class TaskHistoryStore {
 	private readonly globalStoragePath: string
 	private readonly onWrite?: (items: HistoryItem[]) => Promise<void>
+	private readonly isTaskOwned: (taskId: string) => boolean
 	private cache: Map<string, HistoryItem> = new Map()
 	private taskFileMtimes: Map<string, number> = new Map()
 	private writeLock: Promise<void> = Promise.resolve()
@@ -105,6 +120,7 @@ export class TaskHistoryStore {
 	constructor(globalStoragePath: string, options?: TaskHistoryStoreOptions) {
 		this.globalStoragePath = globalStoragePath
 		this.onWrite = options?.onWrite
+		this.isTaskOwned = options?.isTaskOwned ?? (() => false)
 		this.initialized = new Promise<void>((resolve) => {
 			this.resolveInitialized = resolve
 		})
@@ -135,7 +151,7 @@ export class TaskHistoryStore {
 			}
 
 			// 3. Repair delegation inconsistencies left by a previous crash
-			await this.reconcileDelegationState(persistedActiveIds)
+			await withTaskOwnershipReservation(() => this.reconcileDelegationState(persistedActiveIds))
 
 			// 4. Start fs.watch for cross-instance reactivity
 			this.startWatcher()
@@ -471,7 +487,10 @@ export class TaskHistoryStore {
 							`[TaskHistoryStore] Reconciled orphaned delegation: task ${item.id} → active (child ${item.awaitingChildId} not found)`,
 						)
 						repairsInThisPass++
-					} else if (child.status === "delegated" && isDeadDelegationChain(child, (id) => byId.get(id))) {
+					} else if (
+						child.status === "delegated" &&
+						isDeadDelegationChain(child, (id) => byId.get(id), this.isTaskOwned)
+					) {
 						const recoveredChild = recoverDeadDelegatedChild(item, child)
 						await this.upsertCore(recoveredChild)
 						console.warn(

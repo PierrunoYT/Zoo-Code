@@ -743,6 +743,54 @@ describe("ClineProvider.delegateParentAndOpenChild()", () => {
 		expect(provider.createTask).not.toHaveBeenCalled()
 	})
 
+	it("delays task registration until runtime recovery persistence finishes", async () => {
+		let releasePersistence!: () => void
+		const persistenceBlocked = new Promise<void>((resolve) => {
+			releasePersistence = resolve
+		})
+		const parent = { ...parentHistoryItem, status: "delegated" as const, awaitingChildId: "old-child" }
+		const child = {
+			...parentHistoryItem,
+			id: "old-child",
+			status: "delegated" as const,
+			awaitingChildId: "grandchild",
+		}
+		const grandchild = { ...parentHistoryItem, id: "grandchild", status: "interrupted" as const }
+		const taskHistoryStore = makeStoreStub({
+			get: vi.fn((id: string) => (id === child.id ? child : grandchild)),
+			atomicReadAndUpdate: vi.fn(async (_id: string, updater: (item: HistoryItem) => HistoryItem) => {
+				updater(child)
+				await persistenceBlocked
+				return []
+			}),
+		})
+		const taskRegistry = { hasRunning: vi.fn().mockReturnValue(false), push: vi.fn() }
+		const provider = {
+			taskRegistry,
+			taskHistoryStore,
+			log: vi.fn(),
+			performPreparationTasks: vi.fn(),
+			getState: vi.fn().mockResolvedValue({ mode: "code" }),
+		} as unknown as ClineProvider
+		Object.assign(provider, {
+			isTaskRunningInAnyProvider: ClineProvider.prototype["isTaskRunningInAnyProvider"],
+			refreshDelegationChain: ClineProvider.prototype["refreshDelegationChain"],
+		})
+
+		const recovery = ClineProvider.prototype["recoverDeadAwaitedChild"].call(provider, parent, child.id)
+		await vi.waitFor(() => expect(taskHistoryStore.atomicReadAndUpdate).toHaveBeenCalled())
+		const registration = ClineProvider.prototype.addClineToStack.call(provider, {
+			taskId: child.id,
+			emit: vi.fn(),
+		} as never)
+		await Promise.resolve()
+		expect(taskRegistry.push).not.toHaveBeenCalled()
+
+		releasePersistence()
+		await Promise.all([recovery, registration])
+		expect(taskRegistry.push).toHaveBeenCalledOnce()
+	})
+
 	it("does not recover when a descendant is live in another provider", async () => {
 		const oldChildId = "old-child"
 		const grandchildId = "grandchild"

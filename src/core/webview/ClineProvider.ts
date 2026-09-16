@@ -121,6 +121,7 @@ import {
 	saveApiMessages,
 	saveTaskMessages,
 	TaskHistoryStore,
+	withTaskOwnershipReservation,
 	abandonDelegatedChild,
 	completeDelegatedChild,
 	delegateTaskToChild,
@@ -197,6 +198,9 @@ export class ClineProvider
 	public static readonly sideBarId = `${Package.name}.SidebarProvider`
 	public static readonly tabPanelId = `${Package.name}.TabPanelProvider`
 	private static activeInstances: Set<ClineProvider> = new Set()
+	private static isTaskRunningInAnyActiveProvider(taskId: string): boolean {
+		return Array.from(ClineProvider.activeInstances).some((provider) => provider.taskRegistry.hasRunning(taskId))
+	}
 	private disposables: vscode.Disposable[] = []
 	private webviewDisposables: vscode.Disposable[] = []
 	private pendingThemeFixtureProbes = new Map<
@@ -352,6 +356,7 @@ export class ClineProvider
 			onWrite: async () => {
 				this.scheduleGlobalStateWriteThrough()
 			},
+			isTaskOwned: (taskId) => ClineProvider.isTaskRunningInAnyActiveProvider(taskId),
 		})
 		this.initializeTaskHistoryStore().catch((error) => {
 			this.log(`Failed to initialize TaskHistoryStore: ${error}`)
@@ -576,9 +581,11 @@ export class ClineProvider
 	// When the task is completed, the top instance is removed, reactivating the
 	// previous task.
 	async addClineToStack(task: Task) {
-		// Add this cline instance into the stack that represents the order of
-		// all the called tasks.
-		this.taskRegistry.push(task)
+		await withTaskOwnershipReservation(async () => {
+			// Add this cline instance into the stack that represents the order of
+			// all the called tasks.
+			this.taskRegistry.push(task)
+		})
 		task.emit(RooCodeEventName.TaskFocused)
 
 		// Perform special setup provider specific tasks.
@@ -3857,35 +3864,37 @@ export class ClineProvider
 	}
 
 	private async recoverDeadAwaitedChild(parent: HistoryItem, childId: string): Promise<HistoryItem | undefined> {
-		await this.refreshDelegationChain(childId)
-		const child = this.taskHistoryStore.get(childId)
-		if (
-			!child ||
-			!isDeadDelegationChain(
-				child,
-				(id) => this.taskHistoryStore.get(id),
-				(id) => this.isTaskRunningInAnyProvider(id),
-			)
-		) {
-			return child
-		}
-		await this.taskHistoryStore.atomicReadAndUpdate(childId, (currentChild) => {
+		return withTaskOwnershipReservation(async () => {
+			await this.refreshDelegationChain(childId)
+			const child = this.taskHistoryStore.get(childId)
 			if (
+				!child ||
 				!isDeadDelegationChain(
-					currentChild,
+					child,
 					(id) => this.taskHistoryStore.get(id),
 					(id) => this.isTaskRunningInAnyProvider(id),
 				)
 			) {
-				throw new Error(`Delegation chain for child ${childId} became live during recovery`)
+				return child
 			}
-			return recoverDeadDelegatedChild(parent, currentChild)
+			await this.taskHistoryStore.atomicReadAndUpdate(childId, (currentChild) => {
+				if (
+					!isDeadDelegationChain(
+						currentChild,
+						(id) => this.taskHistoryStore.get(id),
+						(id) => this.isTaskRunningInAnyProvider(id),
+					)
+				) {
+					throw new Error(`Delegation chain for child ${childId} became live during recovery`)
+				}
+				return recoverDeadDelegatedChild(parent, currentChild)
+			})
+			const recovered = this.taskHistoryStore.get(childId)
+			this.log(
+				`[delegateParentAndOpenChild] Recovered dead delegated child ${childId} as interrupted before re-delegation`,
+			)
+			return recovered
 		})
-		const recovered = this.taskHistoryStore.get(childId)
-		this.log(
-			`[delegateParentAndOpenChild] Recovered dead delegated child ${childId} as interrupted before re-delegation`,
-		)
-		return recovered
 	}
 
 	/**
@@ -4154,15 +4163,17 @@ export class ClineProvider
 					}`,
 				)
 			}
-			try {
-				const { historyItem: parentHistory } = await this.getTaskWithId(parentTaskId)
-				await this.createTaskWithHistoryItem(parentHistory)
-			} catch (rollbackError) {
-				this.log(
-					`[delegateParentAndOpenChild] Failed to restore parent ${parentTaskId} during rollback: ${
-						(rollbackError as Error)?.message ?? String(rollbackError)
-					}`,
-				)
+			if (!this._disposed) {
+				try {
+					const { historyItem: parentHistory } = await this.getTaskWithId(parentTaskId)
+					await this.createTaskWithHistoryItem(parentHistory)
+				} catch (rollbackError) {
+					this.log(
+						`[delegateParentAndOpenChild] Failed to restore parent ${parentTaskId} during rollback: ${
+							(rollbackError as Error)?.message ?? String(rollbackError)
+						}`,
+					)
+				}
 			}
 			throw err
 		}
