@@ -62,6 +62,19 @@ export function interruptDelegatedChild(parent: HistoryItem, child: HistoryItem)
 	return { ...child, status: "interrupted" }
 }
 
+/** Release an orphaned active child's link without breaking an ancestor's delegation. */
+export function recoverDelegationParent(
+	parent: HistoryItem,
+	ancestor?: HistoryItem,
+): HistoryItem & { status: "active" | "interrupted" } {
+	if (parent.status !== "delegated") {
+		throw new LifecycleTransitionError(`Cannot recover non-delegated parent ${parent.id}`)
+	}
+	const status = ancestor?.status === "delegated" && ancestor.awaitingChildId === parent.id ? "interrupted" : "active"
+	assertValidTransition(parent.status, status)
+	return { ...parent, status, awaitingChildId: undefined, delegatedToId: undefined }
+}
+
 /** True when a delegated task has no live owner and its awaited chain ends dead. */
 export function isDeadDelegationChain(
 	child: HistoryItem,

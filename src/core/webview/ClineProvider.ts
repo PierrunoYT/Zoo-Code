@@ -583,10 +583,19 @@ export class ClineProvider
 	// previous task.
 	async addClineToStack(task: Task) {
 		await withTaskOwnershipReservation(async () => {
+			if (this._disposed || task.abort || task.abandoned) {
+				for (const cleanup of this.taskEventListeners.get(task) ?? []) cleanup()
+				this.taskEventListeners.delete(task)
+				await this.drainTaskDisposal(task)
+				throw new Error(`[addClineToStack] Task ${task.taskId} registration was cancelled`)
+			}
 			// Add this cline instance into the stack that represents the order of
 			// all the called tasks.
 			this.taskRegistry.push(task)
 		})
+		if (this._disposed || task.abort || task.abandoned) {
+			throw new Error(`[addClineToStack] Task ${task.taskId} registration was cancelled`)
+		}
 		task.emit(RooCodeEventName.TaskFocused)
 
 		// Perform special setup provider specific tasks.
@@ -595,6 +604,9 @@ export class ClineProvider
 		// Ensure getState() resolves correctly.
 		const state = await this.getState()
 
+		if (this._disposed || task.abort || task.abandoned) {
+			throw new Error(`[addClineToStack] Task ${task.taskId} registration was cancelled`)
+		}
 		if (!state || typeof state.mode !== "string") {
 			throw new Error(t("common:errors.retrieve_current_mode"))
 		}

@@ -7,6 +7,7 @@ import {
 	interruptDelegatedChild,
 	isDeadDelegationChain,
 	recoverDeadDelegatedChild,
+	recoverDelegationParent,
 } from "../taskLifecycle"
 
 function item(id: string, overrides: Partial<HistoryItem> = {}): HistoryItem {
@@ -24,6 +25,21 @@ function item(id: string, overrides: Partial<HistoryItem> = {}): HistoryItem {
 }
 
 describe("task lifecycle transitions", () => {
+	it("preserves only an ancestor's current delegation when recovering a parent", () => {
+		const parent = delegateTaskToChild(item("middle", { parentTaskId: "root" }), "leaf")
+		const ancestor = delegateTaskToChild(item("root"), parent.id)
+		expect(recoverDelegationParent(parent, ancestor)).toMatchObject({
+			status: "interrupted",
+			parentTaskId: "root",
+			awaitingChildId: undefined,
+			delegatedToId: undefined,
+		})
+		expect(recoverDelegationParent(parent).status).toBe("active")
+		expect(recoverDelegationParent(parent, { ...ancestor, awaitingChildId: "replacement" }).status).toBe("active")
+		expect(recoverDelegationParent(parent, { ...ancestor, status: "active" }).status).toBe("active")
+		expect(() => recoverDelegationParent(item("not-delegated"))).toThrow("non-delegated parent")
+	})
+
 	it("delegates an active parent and retains child history", () => {
 		const parent = delegateTaskToChild(item("parent", { childIds: ["older"] }), "child")
 

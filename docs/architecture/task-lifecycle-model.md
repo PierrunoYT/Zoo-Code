@@ -50,6 +50,8 @@ The model has three fixed task slots, enough to cover competing siblings and a n
 
 Production completion also accepts a recovery-compatible `active` parent that still awaits the returning child, then clears the stale pointers. Normal model transitions never create that intermediate state, so it is covered by a focused reducer test rather than admitted as a generally valid reachable state.
 
+The `recover-active` action models startup repair after an active child loses its owner. `recoverDelegationParent` clears the parent's child pointers but interrupts it when an ancestor still awaits it; a top-level parent becomes active. The repair journal accepts both target statuses so a crash between the child and parent writes cannot break that ancestor link. Filesystem tests cover journal replay and subsequent re-delegation. Provider tests separately cover registration delayed by the recovery reservation, including disposal or cancellation before registration and preventing later scheduling.
+
 ## Shared-store concurrency model
 
 The same `pnpm lifecycle:model-check` command also runs a second bounded explorer over two `TaskHistoryStore` hosts. It imports the production `computeHistoryDelta` and `mergeHistoryDelta` functions, so its semantics match the store rather than assuming coherent caches or transactional pair writes:

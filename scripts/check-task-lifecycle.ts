@@ -9,6 +9,7 @@ import {
 	interruptDelegatedChild,
 	isDeadDelegationChain,
 	recoverDeadDelegatedChild,
+	recoverDelegationParent,
 } from "../src/core/task-persistence/taskLifecycle"
 
 const taskIds = ["parent", "child-a", "child-b"] as const
@@ -27,7 +28,15 @@ interface TraceStep {
 
 const MAX_DEPTH = 12
 const MAX_STATES = 10_000
-const expectedActions = ["delegate", "owner-loss", "interrupt", "recover", "complete", "abandon"] as const
+const expectedActions = [
+	"delegate",
+	"owner-loss",
+	"interrupt",
+	"recover-active",
+	"recover",
+	"complete",
+	"abandon",
+] as const
 const semanticLandmarks = {
 	"interrupted-child-redelegation": (state: ModelState) =>
 		state.parent?.status === "delegated" &&
@@ -121,6 +130,13 @@ function transitions(state: ModelState): Transition[] {
 				name: `interrupt(${childId})`,
 				next: withLiveTasks(replace(state, interrupted), ...state.liveTaskIds.filter((id) => id !== childId)),
 			})
+			if (!state.liveTaskIds.includes(childId) && !state.liveTaskIds.includes(parent.id as TaskId)) {
+				const ancestor = parent.parentTaskId ? state[parent.parentTaskId as TaskId] : undefined
+				result.push({
+					name: `recover-active(${childId})`,
+					next: replace(state, interrupted, recoverDelegationParent(parent, ancestor)),
+				})
+			}
 		}
 
 		if (
