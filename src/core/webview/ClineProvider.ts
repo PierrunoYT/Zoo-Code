@@ -100,6 +100,7 @@ import { setTtsEnabled, setTtsSpeed } from "../../utils/tts"
 import { getWorkspaceGitInfo } from "../../utils/git"
 import { arePathsEqual, getWorkspacePath } from "../../utils/path"
 import { OrganizationAllowListViolationError } from "../../utils/errors"
+import { getTaskDirectoryPath } from "../../utils/storage"
 
 import { setPanel } from "../../activate/registerCommands"
 
@@ -2343,25 +2344,54 @@ export class ClineProvider
 			return undefined
 		}
 
-		await this.resetTaskCheckpointsForWorkspaceChange(historyItem.id)
 		const updatedHistoryItem = { ...historyItem, workspace: currentWorkspace }
-		await this.updateTaskHistory(updatedHistoryItem)
+		await this.resetTaskCheckpointsForWorkspaceChange(historyItem, updatedHistoryItem)
 		return updatedHistoryItem
 	}
 
-	private async resetTaskCheckpointsForWorkspaceChange(taskId: string): Promise<void> {
+	private async resetTaskCheckpointsForWorkspaceChange(
+		originalHistoryItem: HistoryItem,
+		updatedHistoryItem: HistoryItem,
+	): Promise<void> {
+		const taskId = originalHistoryItem.id
 		const globalStoragePath = this.contextProxy.globalStorageUri.fsPath
 		const messages = await readTaskMessages({ taskId, globalStoragePath })
 		const messagesWithoutCheckpoints = messages.filter(
 			(message) => !(message.type === "say" && message.say === "checkpoint_saved"),
 		)
-		const { getTaskDirectoryPath } = await import("../../utils/storage")
 		const taskDir = await getTaskDirectoryPath(globalStoragePath, taskId)
+		const checkpointsDir = path.join(taskDir, "checkpoints")
+		const checkpointBackupDir = path.join(taskDir, `checkpoints.workspace-change-${crypto.randomUUID()}`)
+		let checkpointDirectoryStaged = false
 
-		await fs.rm(path.join(taskDir, "checkpoints"), { recursive: true, force: true })
+		try {
+			await fs.rename(checkpointsDir, checkpointBackupDir)
+			checkpointDirectoryStaged = true
+		} catch (error) {
+			if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) {
+				throw error
+			}
+		}
 
-		if (messagesWithoutCheckpoints.length !== messages.length) {
-			await saveTaskMessages({ messages: messagesWithoutCheckpoints, taskId, globalStoragePath })
+		try {
+			if (messagesWithoutCheckpoints.length !== messages.length) {
+				await saveTaskMessages({ messages: messagesWithoutCheckpoints, taskId, globalStoragePath })
+			}
+			await this.updateTaskHistory(updatedHistoryItem)
+			if (checkpointDirectoryStaged) {
+				await fs.rm(checkpointBackupDir, { recursive: true, force: true })
+			}
+		} catch (error) {
+			if (messagesWithoutCheckpoints.length !== messages.length) {
+				await saveTaskMessages({ messages, taskId, globalStoragePath })
+			}
+			if (checkpointDirectoryStaged) {
+				await fs.rename(checkpointBackupDir, checkpointsDir)
+			}
+			if (this.taskHistoryStore.get(taskId)?.workspace === updatedHistoryItem.workspace) {
+				await this.updateTaskHistory(originalHistoryItem)
+			}
+			throw error
 		}
 	}
 
