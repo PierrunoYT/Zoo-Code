@@ -238,6 +238,10 @@ describe("Opencode Go Fetchers", () => {
 			expect(info.supportsPromptCache).toBe(true)
 			expect(info.supportsMaxTokens).toBe(true)
 			expect(info.supportsReasoningEffort).toEqual(["disable", "low", "medium", "high", "xhigh"])
+			expect(info.supportsImages).toBe(true)
+			expect(info.inputPrice).toBe(0.3)
+			expect(info.outputPrice).toBe(1.2)
+			expect(info.cacheReadsPrice).toBe(0.006)
 		})
 
 		it("resolves GLM-5.2 with its 1M context and High/Max reasoning effort", () => {
