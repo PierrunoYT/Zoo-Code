@@ -4986,6 +4986,12 @@ describe("ClineProvider - Comprehensive Edit/Delete Edge Cases", () => {
 			await expect(provider.getTaskWithId(historyItem.id)).rejects.toThrow("Task not found")
 		})
 
+		it("rejects a missing task before file-backed history initialization", async () => {
+			provider["taskHistoryStoreInitialized"] = false
+			vi.mocked(mockContext.globalState.get).mockReturnValue(undefined)
+			await expect(provider.getTaskWithId("cold-start-missing-task")).rejects.toThrow("Task not found")
+		})
+
 		it("returns empty apiConversationHistory when file is missing", async () => {
 			const historyItem = { id: "missing-api-file-task", task: "test task", ts: Date.now() }
 			vi.mocked(mockContext.globalState.get).mockImplementation((key: string) => {
