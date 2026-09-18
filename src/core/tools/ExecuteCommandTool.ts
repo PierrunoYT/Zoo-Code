@@ -148,7 +148,7 @@ export class ExecuteCommandTool extends BaseTool<"execute_command"> {
 				const workingDirectoryError = await commandWorkingDirectoryError(workingDirectory)
 				if (workingDirectoryError) {
 					task.didToolFailInCurrentTurn = true
-					pushToolResult(workingDirectoryError)
+					pushToolResult(formatResponse.toolError(workingDirectoryError))
 					return
 				}
 				const { ensureDcgInstalled, runDcg } = await import("../../services/destructive-command-guard")

@@ -274,6 +274,22 @@ describe("executeCommand", () => {
 			expect(result).toBe(`Working directory '${nonExistentCwd}' does not exist.`)
 			expect(TerminalRegistry.getOrCreateTerminal).not.toHaveBeenCalled()
 		})
+
+		it("should return error when custom working directory is an existing file", async () => {
+			const filePath = "/existing/file.txt"
+			vitest.mocked(fs.stat).mockResolvedValueOnce({ isDirectory: () => false } as Stats)
+
+			const [rejected, result] = await executeCommandInTerminal(mockTask, {
+				executionId: "test-123",
+				command: "echo test",
+				customCwd: filePath,
+				terminalShellIntegrationDisabled: false,
+			})
+
+			expect(rejected).toBe(false)
+			expect(result).toBe(`Working directory '${filePath}' is not a directory.`)
+			expect(TerminalRegistry.getOrCreateTerminal).not.toHaveBeenCalled()
+		})
 	})
 
 	describe("Terminal Provider Selection", () => {

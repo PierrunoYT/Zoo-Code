@@ -374,11 +374,12 @@ describe("executeCommandTool", () => {
 			})
 
 			expect(mockPushToolResult).toHaveBeenCalledWith(
-				"Working directory '/missing/remote/workspace' does not exist.",
+				formatResponse.toolError("Working directory '/missing/remote/workspace' does not exist."),
 			)
 			expect(mockEnsureDcgInstalled).not.toHaveBeenCalled()
 			expect(mockRunDcg).not.toHaveBeenCalled()
 			expect(mockAskApproval).not.toHaveBeenCalled()
+			expect(mockCline.didToolFailInCurrentTurn).toBe(true)
 		})
 
 		it("rejects an existing file used as the working directory", async () => {
@@ -396,11 +397,12 @@ describe("executeCommandTool", () => {
 
 			expect(fs.access).toHaveBeenCalledWith("/remote/workspace/file.txt")
 			expect(mockPushToolResult).toHaveBeenCalledWith(
-				"Working directory '/remote/workspace/file.txt' is not a directory.",
+				formatResponse.toolError("Working directory '/remote/workspace/file.txt' is not a directory."),
 			)
 			expect(mockEnsureDcgInstalled).not.toHaveBeenCalled()
 			expect(mockRunDcg).not.toHaveBeenCalled()
 			expect(mockAskApproval).not.toHaveBeenCalled()
+			expect(mockCline.didToolFailInCurrentTurn).toBe(true)
 		})
 
 		it("fails closed when the DCG install or update fails", async () => {
