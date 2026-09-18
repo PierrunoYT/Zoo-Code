@@ -81,6 +81,29 @@ describe("convertToBedrockConverseMessages", () => {
 		])
 	})
 
+	it("converts unsigned thinking blocks without adding a signature", () => {
+		// Persisted provider output can omit a signature even though the Anthropic SDK requires one.
+		const messages = [
+			{
+				role: "assistant",
+				content: [{ type: "thinking", thinking: "I should inspect the file first." }],
+			},
+		] as unknown as Anthropic.Messages.MessageParam[]
+
+		expect(convertToBedrockConverseMessages(messages)).toStrictEqual([
+			{
+				role: "assistant",
+				content: [
+					{
+						reasoningContent: {
+							reasoningText: { text: "I should inspect the file first." },
+						},
+					},
+				],
+			},
+		])
+	})
+
 	it("converts messages with images correctly", () => {
 		const messages: Anthropic.Messages.MessageParam[] = [
 			{

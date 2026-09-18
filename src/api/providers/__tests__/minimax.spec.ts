@@ -364,6 +364,34 @@ describe("MiniMaxHandler", () => {
 			expect(handler.getThoughtSignature()).toBe("signed-reasoning")
 		})
 
+		it("clears stale thinking signatures before the next request", async () => {
+			mockCreate
+				.mockResolvedValueOnce(
+					asyncStreamFrom([
+						{
+							type: "content_block_delta",
+							index: 0,
+							delta: { type: "signature_delta", signature: "signed-reasoning" },
+						},
+					]),
+				)
+				.mockResolvedValueOnce(
+					asyncStreamFrom([
+						{
+							type: "content_block_delta",
+							index: 0,
+							delta: { type: "thinking_delta", thinking: "Continue without a signature." },
+						},
+					]),
+				)
+
+			await collectStream(handler.createMessage("system prompt", []))
+			expect(handler.getThoughtSignature()).toBe("signed-reasoning")
+
+			await collectStream(handler.createMessage("system prompt", []))
+			expect(handler.getThoughtSignature()).toBeUndefined()
+		})
+
 		it("filters legacy reasoning blocks while preserving signed thinking blocks", async () => {
 			mockCreate.mockResolvedValueOnce(asyncStreamFrom([]))
 			// The Anthropic SDK does not model Zoo Code's legacy internal reasoning block,
