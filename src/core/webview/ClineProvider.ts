@@ -2379,9 +2379,6 @@ export class ClineProvider
 				await saveTaskMessages({ messages: messagesWithoutCheckpoints, taskId, globalStoragePath })
 			}
 			await this.updateTaskHistory(updatedHistoryItem)
-			if (checkpointDirectoryStaged) {
-				await fs.rm(checkpointBackupDir, { recursive: true, force: true })
-			}
 		} catch (error) {
 			if (messagesWithoutCheckpoints.length !== messages.length) {
 				await saveTaskMessages({ messages, taskId, globalStoragePath })
@@ -2393,6 +2390,16 @@ export class ClineProvider
 				await this.updateTaskHistory(originalHistoryItem)
 			}
 			throw error
+		}
+
+		if (checkpointDirectoryStaged) {
+			try {
+				await fs.rm(checkpointBackupDir, { recursive: true, force: true })
+			} catch (error) {
+				this.log(
+					`[resetTaskCheckpointsForWorkspaceChange] Failed to remove checkpoint backup for ${taskId}: ${error instanceof Error ? error.message : String(error)}`,
+				)
+			}
 		}
 	}
 

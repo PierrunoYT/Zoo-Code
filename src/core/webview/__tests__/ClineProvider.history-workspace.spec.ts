@@ -194,4 +194,46 @@ describe("ClineProvider historical workspace selection", () => {
 			await fs.rm(storagePath, { recursive: true, force: true })
 		}
 	})
+
+	it("keeps committed history when checkpoint backup cleanup fails", async () => {
+		const storagePath = await fs.mkdtemp(path.join(os.tmpdir(), "zoo-history-workspace-cleanup-"))
+		const taskDir = path.join(storagePath, "tasks", "task-1602")
+		const checkpointsDir = path.join(taskDir, "checkpoints")
+		const messagesPath = path.join(taskDir, "ui_messages.json")
+		await fs.mkdir(checkpointsDir, { recursive: true })
+		await fs.writeFile(path.join(checkpointsDir, "HEAD"), "old checkpoint")
+		await fs.writeFile(
+			messagesPath,
+			JSON.stringify([
+				{ type: "say", say: "task", ts: 1, text: "Continue" },
+				{ type: "say", say: "checkpoint_saved", ts: 2, text: "old-hash" },
+			]),
+		)
+
+		const provider = createProvider("/current/workspace")
+		const original = historyItem("/old/worktree")
+		const updated = { ...original, workspace: "/current/workspace" }
+		Object.defineProperty(provider, "contextProxy", {
+			value: { globalStorageUri: { fsPath: storagePath } },
+		})
+		Object.defineProperty(provider, "taskHistoryStore", { value: { get: vi.fn().mockReturnValue(updated) } })
+		provider.updateTaskHistory = vi.fn().mockResolvedValue([])
+		provider["log"] = vi.fn()
+		vi.spyOn(fs, "rm").mockRejectedValueOnce(new Error("backup cleanup failed"))
+
+		try {
+			await expect(provider["resetTaskCheckpointsForWorkspaceChange"](original, updated)).resolves.toBeUndefined()
+
+			expect(provider.updateTaskHistory).toHaveBeenCalledOnce()
+			expect(provider.updateTaskHistory).toHaveBeenCalledWith(updated)
+			expect(provider["log"]).toHaveBeenCalledWith(expect.stringContaining("backup cleanup failed"))
+			await expect(fs.stat(checkpointsDir)).rejects.toMatchObject({ code: "ENOENT" })
+			expect(JSON.parse(await fs.readFile(messagesPath, "utf8"))).toMatchObject([
+				{ type: "say", say: "task", text: "Continue" },
+			])
+		} finally {
+			vi.mocked(fs.rm).mockRestore()
+			await fs.rm(storagePath, { recursive: true, force: true })
+		}
+	})
 })
