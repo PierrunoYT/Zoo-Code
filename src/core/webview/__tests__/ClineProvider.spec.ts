@@ -1182,6 +1182,37 @@ describe("ClineProvider", () => {
 		expect(schedulingSpy).not.toHaveBeenCalled()
 	})
 
+	test.each(["preparation", "state"])("rolls back registration when cancellation occurs during %s", async (phase) => {
+		const task = new Task(defaultTaskOptions)
+		const cleanup = vi.fn()
+		provider["taskEventListeners"].set(task, [cleanup])
+		let release!: () => void
+		const pending = new Promise<void>((resolve) => {
+			release = resolve
+		})
+
+		if (phase === "preparation") {
+			vi.spyOn(provider, "performPreparationTasks").mockReturnValue(pending)
+		} else {
+			const getState = provider.getState.bind(provider)
+			vi.spyOn(provider, "getState").mockImplementation(async (options) => {
+				await pending
+				return getState(options)
+			})
+		}
+
+		const registration = provider.addClineToStack(task)
+		await vi.waitFor(() => expect(provider["taskRegistry"].getById(task.taskId)).toBe(task))
+		task.abort = true
+		release()
+
+		await expect(registration).rejects.toThrow("registration was cancelled")
+		expect(provider["taskRegistry"].getById(task.taskId)).toBeUndefined()
+		expect(cleanup).toHaveBeenCalledOnce()
+		expect(provider["taskEventListeners"].has(task)).toBe(false)
+		expect(task.dispose).toHaveBeenCalledOnce()
+	})
+
 	test("dispose drains every task in abort-then-cleanup order", async () => {
 		let resolveCurrentAbort!: () => void
 		let resolveCurrentCleanup!: () => void

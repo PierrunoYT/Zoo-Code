@@ -593,23 +593,41 @@ export class ClineProvider
 			// all the called tasks.
 			this.taskRegistry.push(task)
 		})
+
+		try {
+			this.throwIfTaskRegistrationCancelled(task)
+			task.emit(RooCodeEventName.TaskFocused)
+
+			// Perform special setup provider specific tasks.
+			await this.performPreparationTasks(task)
+			this.throwIfTaskRegistrationCancelled(task)
+
+			// Ensure getState() resolves correctly.
+			const state = await this.getState()
+			this.throwIfTaskRegistrationCancelled(task)
+
+			if (!state || typeof state.mode !== "string") {
+				throw new Error(t("common:errors.retrieve_current_mode"))
+			}
+		} catch (error) {
+			await this.rollbackTaskRegistration(task)
+			throw error
+		}
+	}
+
+	private throwIfTaskRegistrationCancelled(task: Task): void {
 		if (this._disposed || task.abort || task.abandoned) {
 			throw new Error(`[addClineToStack] Task ${task.taskId} registration was cancelled`)
 		}
-		task.emit(RooCodeEventName.TaskFocused)
+	}
 
-		// Perform special setup provider specific tasks.
-		await this.performPreparationTasks(task)
-
-		// Ensure getState() resolves correctly.
-		const state = await this.getState()
-
-		if (this._disposed || task.abort || task.abandoned) {
-			throw new Error(`[addClineToStack] Task ${task.taskId} registration was cancelled`)
+	private async rollbackTaskRegistration(task: Task): Promise<void> {
+		if (this.taskRegistry.getById(task.taskId) === task) {
+			this.taskRegistry.remove(task.taskId)
 		}
-		if (!state || typeof state.mode !== "string") {
-			throw new Error(t("common:errors.retrieve_current_mode"))
-		}
+		for (const cleanup of this.taskEventListeners.get(task) ?? []) cleanup()
+		this.taskEventListeners.delete(task)
+		await this.drainTaskDisposal(task)
 	}
 
 	async performPreparationTasks(cline: Task) {
