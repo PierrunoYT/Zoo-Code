@@ -3881,6 +3881,9 @@ export class ClineProvider
 		// waited on the shared lock. Refresh before mutating either task stack.
 		await this.taskHistoryStore.invalidate(parentTaskId)
 		const authoritativeParent = this.taskHistoryStore.get(parentTaskId)
+		if (authoritativeParent?.status === "interrupted" && authoritativeParent.parentTaskId) {
+			await this.taskHistoryStore.invalidate(authoritativeParent.parentTaskId)
+		}
 		if (authoritativeParent?.status === "delegated") {
 			const awaitedChildId = authoritativeParent.awaitingChildId
 			if (!awaitedChildId) throw new Error("Cannot re-delegate a parent with no awaited child")
@@ -4024,7 +4027,10 @@ export class ClineProvider
 				const awaitedChildStatus = historyItem.awaitingChildId
 					? this.taskHistoryStore.get(historyItem.awaitingChildId)?.status
 					: undefined
-				const delegated = delegateTaskToChild(historyItem, child.taskId, awaitedChildStatus)
+				const owningParent = historyItem.parentTaskId
+					? this.taskHistoryStore.get(historyItem.parentTaskId)
+					: undefined
+				const delegated = delegateTaskToChild(historyItem, child.taskId, awaitedChildStatus, owningParent)
 				return {
 					...delegated,
 					pendingAction:
@@ -4068,12 +4074,52 @@ export class ClineProvider
 			}
 			try {
 				const { historyItem: parentHistory } = await this.getTaskWithId(parentTaskId)
+				if (pendingActionId && parentHistory.pendingAction?.actionId === pendingActionId) {
+					// Resolve the failed action durably BEFORE restoring the parent. Otherwise
+					// history resume auto-approves the same action and repeats this rollback.
+					// If this write fails, do not schedule a replacement task at all.
+					const globalStoragePath = this.contextProxy.globalStorageUri.fsPath
+					const messages = await readApiMessages({ taskId: parentTaskId, globalStoragePath })
+					const hasResult = messages.some(
+						(message) =>
+							message.role === "user" &&
+							Array.isArray(message.content) &&
+							message.content.some(
+								(block) => block.type === "tool_result" && block.tool_use_id === pendingActionId,
+							),
+					)
+					if (!hasResult) {
+						await saveApiMessages({
+							taskId: parentTaskId,
+							globalStoragePath,
+							merge: true,
+							messages: [
+								...messages,
+								{
+									role: "user",
+									ts: Date.now(),
+									content: [
+										{
+											type: "tool_result",
+											tool_use_id: pendingActionId,
+											content: `Subtask creation failed: ${err instanceof Error ? err.message : String(err)}`,
+											is_error: true,
+										},
+									],
+								},
+							],
+						})
+					}
+				}
 				await this.createTaskWithHistoryItem(parentHistory)
 			} catch (rollbackError) {
 				this.log(
 					`[delegateParentAndOpenChild] Failed to restore parent ${parentTaskId} during rollback: ${
 						(rollbackError as Error)?.message ?? String(rollbackError)
 					}`,
+				)
+				void vscode.window.showErrorMessage(
+					"Subtask creation failed and the parent could not be restored safely. Reopen the task to retry.",
 				)
 			}
 			throw err
