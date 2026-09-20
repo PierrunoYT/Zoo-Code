@@ -35,7 +35,10 @@ permissions:
   statuses: write
 
 concurrency:
+  # Serialize sweeps and PR events together, but do not replace pending runs (#1707).
+  # GitHub allows up to 100 waiting runs with queue: max; excess arrivals are cancelled.
   group: label-pr-review-state
+  queue: max
   cancel-in-progress: false
 
 jobs:
