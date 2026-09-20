@@ -508,6 +508,13 @@ export class ClineProvider
 			}
 
 			this.taskHistoryStoreInitialized = true
+
+			// Also remove blobs left by earlier versions that already completed migration.
+			// A cleanup failure must not make stale legacy history authoritative again;
+			// leave the store initialized and retry cleanup on the next startup.
+			if (this.context.globalState.get("taskHistory") !== undefined) {
+				await this.context.globalState.update("taskHistory", undefined)
+			}
 		} catch (error) {
 			this.log(`[initializeTaskHistoryStore] Error: ${error instanceof Error ? error.message : String(error)}`)
 		}

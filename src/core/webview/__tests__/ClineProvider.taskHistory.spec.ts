@@ -387,6 +387,94 @@ describe("ClineProvider Task History Synchronization", () => {
 		return calls.filter((call) => call[0]?.type === type)
 	}
 
+	describe("legacy history cleanup", () => {
+		let legacyHistory: HistoryItem[]
+
+		beforeEach(async () => {
+			legacyHistory = [createHistoryItem({ id: "legacy-task", task: "Legacy task" })]
+			await mockContext.globalState.update("taskHistory", legacyHistory)
+			await mockContext.globalState.update("taskHistoryMigratedToFiles", undefined)
+			vi.mocked(mockContext.globalState.update).mockClear()
+			provider["taskHistoryStoreInitialized"] = false
+		})
+
+		it.each([false, true])(
+			"clears legacy history after migration (already migrated: %s)",
+			async (alreadyMigrated) => {
+				await mockContext.globalState.update("taskHistoryMigratedToFiles", alreadyMigrated)
+				vi.mocked(mockContext.globalState.update).mockClear()
+				const migrate = vi
+					.spyOn(provider.taskHistoryStore, "migrateFromGlobalState")
+					.mockImplementation(async () => {
+						expect(mockContext.globalState.get("taskHistory")).toEqual(legacyHistory)
+						expect(mockContext.globalState.get("taskHistoryMigratedToFiles")).toBe(false)
+					})
+
+				await provider["initializeTaskHistoryStore"]()
+
+				expect(migrate).toHaveBeenCalledTimes(alreadyMigrated ? 0 : 1)
+				if (!alreadyMigrated) {
+					expect(migrate).toHaveBeenCalledWith(legacyHistory)
+				}
+				expect(vi.mocked(mockContext.globalState.update).mock.calls).toEqual(
+					alreadyMigrated
+						? [["taskHistory", undefined]]
+						: [
+								["taskHistoryMigratedToFiles", true],
+								["taskHistory", undefined],
+							],
+				)
+				expect(mockContext.globalState.get("taskHistory")).toBeUndefined()
+				expect(provider["taskHistoryStoreInitialized"]).toBe(true)
+			},
+		)
+
+		it.each(["initialization", "migration", "marker"])("preserves legacy history when %s fails", async (stage) => {
+			const error = new Error(`${stage} failed`)
+			const migrate = vi.spyOn(provider.taskHistoryStore, "migrateFromGlobalState").mockResolvedValue(undefined)
+			if (stage === "initialization") {
+				vi.spyOn(provider.taskHistoryStore, "initialize").mockRejectedValueOnce(error)
+			} else if (stage === "migration") {
+				migrate.mockRejectedValueOnce(error)
+			} else {
+				vi.mocked(mockContext.globalState.update).mockRejectedValueOnce(error)
+			}
+
+			await provider["initializeTaskHistoryStore"]()
+
+			expect(mockContext.globalState.update).not.toHaveBeenCalledWith("taskHistory", undefined)
+			expect(mockContext.globalState.get("taskHistory")).toEqual(legacyHistory)
+			expect(mockContext.globalState.get("taskHistoryMigratedToFiles")).toBeUndefined()
+			expect(provider["taskHistoryStoreInitialized"]).toBe(false)
+		})
+
+		it("keeps the store authoritative if cleanup fails and retries cleanup on initialization", async () => {
+			await mockContext.globalState.update("taskHistoryMigratedToFiles", true)
+			vi.mocked(mockContext.globalState.update).mockRejectedValueOnce(new Error("cleanup failed"))
+
+			await provider["initializeTaskHistoryStore"]()
+
+			expect(mockContext.globalState.get("taskHistory")).toEqual(legacyHistory)
+			expect(provider["taskHistoryStoreInitialized"]).toBe(true)
+			await expect(provider.getTaskWithId("legacy-task")).rejects.toThrow("Task not found")
+
+			await provider["initializeTaskHistoryStore"]()
+
+			expect(mockContext.globalState.get("taskHistory")).toBeUndefined()
+		})
+
+		it("does not write globalState again after cleanup", async () => {
+			await mockContext.globalState.update("taskHistoryMigratedToFiles", true)
+			await mockContext.globalState.update("taskHistory", undefined)
+			vi.mocked(mockContext.globalState.update).mockClear()
+
+			await provider["initializeTaskHistoryStore"]()
+
+			expect(mockContext.globalState.update).not.toHaveBeenCalled()
+			expect(provider["taskHistoryStoreInitialized"]).toBe(true)
+		})
+	})
+
 	it("uses per-task files without registering a globalState write-through callback", () => {
 		expect(provider.taskHistoryStore["onWrite"]).toBeUndefined()
 	})
