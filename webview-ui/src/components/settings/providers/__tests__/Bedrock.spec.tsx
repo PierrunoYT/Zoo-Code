@@ -85,6 +85,31 @@ describe("Bedrock Component", () => {
 		vi.clearAllMocks()
 	})
 
+	it.each([
+		[false, false, "anthropic.claude-sonnet-4-5-20250929-v1:0"],
+		[true, false, "eu.anthropic.claude-sonnet-4-5-20250929-v1:0"],
+		[true, true, "global.anthropic.claude-sonnet-4-5-20250929-v1:0"],
+	] as const)(
+		"previews the effective model for cross-region=%s global=%s",
+		(awsUseCrossRegionInference, awsUseGlobalInference, expected) => {
+			render(
+				<Bedrock
+					apiConfiguration={{
+						apiModelId: "anthropic.claude-sonnet-4-5-20250929-v1:0",
+						awsRegion: "eu-west-3",
+						awsUseCrossRegionInference,
+						awsUseGlobalInference,
+					}}
+					setApiConfigurationField={mockSetApiConfigurationField}
+				/>,
+			)
+			expect(screen.getByTestId("bedrock-request-model")).toHaveTextContent(expected)
+			expect(screen.getByText("settings:providers.awsGlobalInferenceDescription")).toBeInTheDocument()
+			expect(screen.getByText("settings:providers.awsCrossRegionDescription")).toBeInTheDocument()
+			expect(mockSetApiConfigurationField).not.toHaveBeenCalled()
+		},
+	)
+
 	it("should show text field when VPC endpoint checkbox is checked", () => {
 		// Initial render with checkbox unchecked
 		const apiConfiguration: Partial<ProviderSettings> = {
