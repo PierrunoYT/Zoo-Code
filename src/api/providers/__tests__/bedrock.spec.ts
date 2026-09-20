@@ -70,6 +70,8 @@ import { HttpsProxyAgent } from "https-proxy-agent"
 
 import { makeCreateMessageMetadata } from "../../../test-utils/api"
 import { clearAllMocks } from "../../../test-utils/reset"
+import { asyncStreamFrom, collectStream } from "../../../test-utils/stream"
+import type { ApiStreamChunk } from "../../transform/stream"
 
 // Get access to the mocked functions
 const mockConverseStreamCommand = vi.mocked(ConverseStreamCommand)
@@ -92,6 +94,68 @@ describe("AwsBedrockHandler", () => {
 			awsSecretKey: "test-secret-key",
 			awsRegion: "us-east-1",
 		})
+	})
+
+	it.each(["max_tokens", "end_turn", "tool_use", "stop_sequence"])(
+		"reports truncation only for %s, after preserving usage",
+		async (stopReason) => {
+			handler["client"].send = vi.fn().mockResolvedValue({
+				stream: asyncStreamFrom([
+					{ contentBlockDelta: { delta: { reasoningContent: { text: "Still thinking" } } } },
+					{ messageStop: { stopReason } },
+					{ metadata: { usage: { inputTokens: 37, outputTokens: 16384 } } },
+				]),
+			})
+			const chunks: ApiStreamChunk[] = []
+			const consume = async () => {
+				for await (const chunk of handler.createMessage("system", [{ role: "user", content: "hello" }])) {
+					chunks.push(chunk)
+				}
+			}
+			if (stopReason === "max_tokens") {
+				await expect(consume()).rejects.toThrow(
+					"Output token limit reached. Consider increasing Max Output Tokens",
+				)
+			} else {
+				await expect(consume()).resolves.toBeUndefined()
+			}
+			expect(chunks).toEqual(
+				expect.arrayContaining([
+					{ type: "reasoning", text: "Still thinking" },
+					expect.objectContaining({ type: "usage", inputTokens: 37, outputTokens: 16384 }),
+				]),
+			)
+		},
+	)
+
+	it.each([
+		["anthropic.claude-sonnet-4-5-20250929-v1:0", 64_000],
+		["anthropic.claude-sonnet-4-6", 64_000],
+		["anthropic.claude-sonnet-5", 128_000],
+		["anthropic.claude-opus-4-7", 128_000],
+		["anthropic.claude-opus-4-8", 128_000],
+		["anthropic.claude-opus-5", 128_000],
+	] as const)("exposes %s output ceiling without raising request defaults", async (apiModelId, ceiling) => {
+		for (const enableReasoningEffort of [true, false]) {
+			for (const modelMaxTokens of [undefined, ceiling]) {
+				const provider = new AwsBedrockHandler({ apiModelId, enableReasoningEffort, modelMaxTokens })
+				expect(provider.getModel().info.maxTokens).toBe(ceiling)
+				provider["client"].send = vi.fn().mockResolvedValue({ stream: asyncStreamFrom([]) })
+				await collectStream(provider.createMessage("system", [{ role: "user", content: "hello" }]))
+				const configurableWithoutReasoning = apiModelId.endsWith("-5")
+				const expected =
+					modelMaxTokens && (enableReasoningEffort || configurableWithoutReasoning)
+						? ceiling
+						: enableReasoningEffort
+							? 16_384
+							: 8192
+				expect(mockConverseStreamCommand).toHaveBeenLastCalledWith(
+					expect.objectContaining({
+						inferenceConfig: expect.objectContaining({ maxTokens: expected }),
+					}),
+				)
+			}
+		}
 	})
 
 	describe("getModel", () => {

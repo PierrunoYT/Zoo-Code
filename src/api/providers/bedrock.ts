@@ -601,6 +601,7 @@ export class AwsBedrockHandler extends BaseProvider implements SingleCompletionH
 				throw new Error("No stream available in the response")
 			}
 
+			let outputLimitReached = false
 			for await (const chunk of response.stream) {
 				// Parse the chunk as JSON if it's a string (for tests)
 				let streamEvent: StreamEvent
@@ -784,8 +785,15 @@ export class AwsBedrockHandler extends BaseProvider implements SingleCompletionH
 				}
 				// Handle message stop
 				if (streamEvent.messageStop) {
+					outputLimitReached = streamEvent.messageStop.stopReason === "max_tokens"
 					continue
 				}
+			}
+			// Bedrock sends usage metadata after messageStop. Preserve it before reporting truncation.
+			if (outputLimitReached) {
+				throw new Error(
+					"Output token limit reached. Consider increasing Max Output Tokens in the model settings.",
+				)
 			}
 			// Clear timeout after stream completes
 			clearTimeout(timeoutId)
