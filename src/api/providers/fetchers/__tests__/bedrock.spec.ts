@@ -92,3 +92,61 @@ it("does not silently use the default credential chain when API-key authenticati
 	await expect(getBedrockCatalog({ awsRegion: "eu-west-3", awsUseApiKey: true })).rejects.toThrow("IAM credentials")
 	expect(BedrockClient).not.toHaveBeenCalled()
 })
+
+it("rejects a missing region before creating a client", async () => {
+	await expect(getBedrockCatalog({})).rejects.toThrow("Select an AWS region")
+	expect(BedrockClient).not.toHaveBeenCalled()
+})
+
+it("filters legacy and incomplete entries and sorts display names with ID/ARN fallbacks", async () => {
+	send.mockResolvedValue({
+		modelSummaries: [
+			{ modelArn: "legacy", responseStreamingSupported: true, modelLifecycle: { status: "LEGACY" } },
+			{ modelName: "Missing ARN", responseStreamingSupported: true },
+			{ modelArn: "z-arn", responseStreamingSupported: true },
+			{ modelArn: "foundation", modelId: "b-id", responseStreamingSupported: true },
+		],
+	})
+	pages.mockImplementation(async function* () {
+		yield {
+			inferenceProfileSummaries: [
+				{ status: "ACTIVE", inferenceProfileName: "Missing ARN" },
+				{
+					inferenceProfileArn: "profile",
+					inferenceProfileId: "global.id",
+					inferenceProfileName: "a-name",
+					status: "ACTIVE",
+					type: "APPLICATION",
+				},
+				{ inferenceProfileArn: "c-arn", status: "ACTIVE" },
+			],
+		}
+	})
+	await expect(getBedrockCatalog({ awsRegion: "eu-west-3" })).resolves.toEqual([
+		{ arn: "profile", name: "a-name", kind: "application" },
+		{ arn: "foundation", name: "b-id", kind: "regional" },
+		{ arn: "c-arn", name: "c-arn", kind: "geographic" },
+		{ arn: "z-arn", name: "z-arn", kind: "regional" },
+	])
+	expect(BedrockClient).toHaveBeenCalledWith(expect.objectContaining({ credentials: undefined }))
+	expect(destroy).toHaveBeenCalledOnce()
+})
+
+it("accepts empty AWS responses without inventing models", async () => {
+	send.mockResolvedValue({})
+	pages.mockImplementation(async function* () {
+		yield {}
+	})
+	await expect(getBedrockCatalog({ awsRegion: "eu-west-3" })).resolves.toEqual([])
+	expect(destroy).toHaveBeenCalledOnce()
+})
+
+it("releases the client if a later profile page fails instead of returning partial availability", async () => {
+	send.mockResolvedValue({ modelSummaries: [] })
+	pages.mockImplementation(async function* () {
+		yield { inferenceProfileSummaries: [{ inferenceProfileArn: "first", status: "ACTIVE" }] }
+		throw new Error("Pagination denied")
+	})
+	await expect(getBedrockCatalog({ awsRegion: "eu-west-3" })).rejects.toThrow("Pagination denied")
+	expect(destroy).toHaveBeenCalledOnce()
+})
