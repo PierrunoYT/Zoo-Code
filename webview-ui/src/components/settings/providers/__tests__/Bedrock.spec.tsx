@@ -106,7 +106,7 @@ describe("Bedrock Component", () => {
 				setApiConfigurationField={mockSetApiConfigurationField}
 			/>,
 		)
-		expect(screen.getByTestId("bedrock-request-model").querySelector("code")).toHaveTextContent(expected)
+		expect(screen.getByTestId("bedrock-request-model").querySelector("code")?.textContent).toBe(expected)
 		expect(screen.getByText("settings:providers.awsArnRouting")).toBeInTheDocument()
 		expect(mockSetApiConfigurationField).not.toHaveBeenCalled()
 	})
