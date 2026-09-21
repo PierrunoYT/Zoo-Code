@@ -756,17 +756,13 @@ export class TaskHistoryStore {
 	 */
 	async invalidate(taskId: string): Promise<void> {
 		return this.withLock(async () => {
-			try {
-				const item = await this.readTaskFile(taskId)
-				if (item) {
-					this.cache.set(taskId, item)
-				} else {
-					this.cache.delete(taskId)
-				}
-				this.taskFileMtimes.delete(taskId)
-			} catch {
+			const item = await this.readTaskFile(taskId)
+			if (item) {
+				this.cache.set(taskId, item)
+			} else {
 				this.cache.delete(taskId)
 			}
+			this.taskFileMtimes.delete(taskId)
 		})
 	}
 
@@ -877,9 +873,11 @@ export class TaskHistoryStore {
 		try {
 			const raw = await fs.readFile(filePath, "utf8")
 			const item: HistoryItem = JSON.parse(raw)
-			return item.id ? item : null
-		} catch {
-			return null
+			if (!item?.id) throw new Error(`Invalid task history record: ${filePath}`)
+			return item
+		} catch (error) {
+			if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return null
+			throw error
 		}
 	}
 

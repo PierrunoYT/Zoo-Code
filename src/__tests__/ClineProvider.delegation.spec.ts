@@ -54,6 +54,41 @@ const makeParentTask = () =>
 	}) as any
 
 describe("ClineProvider.delegateParentAndOpenChild()", () => {
+	it("stops before delegation when refreshing the interrupted task's owner fails", async () => {
+		const parentTask = makeParentTask()
+		const historyItem: HistoryItem = {
+			...parentHistoryItem,
+			status: "interrupted",
+			parentTaskId: "root",
+			rootTaskId: "root",
+		}
+		const taskHistoryStore = makeStoreStub({ get: vi.fn().mockReturnValue(historyItem) })
+		taskHistoryStore.invalidate.mockImplementation(async (id: string) => {
+			if (id === "root") throw new Error("owner read failed")
+		})
+		const provider = {
+			getCurrentTask: vi.fn(() => parentTask),
+			createTask: vi.fn(),
+			removeClineFromStack: vi.fn(),
+			taskHistoryStore,
+			// Only the boundaries reached before delegation are needed for this failure.
+		} as unknown as ClineProvider
+
+		await expect(
+			ClineProvider.prototype.delegateParentAndOpenChild.call(provider, {
+				parentTaskId: "parent-1",
+				message: "Do something",
+				initialTodos: [],
+				mode: "code",
+			}),
+		).rejects.toThrow("owner read failed")
+		expect(taskHistoryStore.invalidate).toHaveBeenNthCalledWith(2, "root")
+		expect(taskHistoryStore.atomicReadAndUpdate).not.toHaveBeenCalled()
+		expect(provider.createTask).not.toHaveBeenCalled()
+		expect(provider.removeClineFromStack).not.toHaveBeenCalled()
+		expect(historyItem).toMatchObject({ status: "interrupted", parentTaskId: "root", rootTaskId: "root" })
+	})
+
 	it("rejects a stale restored action before delegation side effects", async () => {
 		const parentTask = makeParentTask()
 		const removeClineFromStack = vi.fn()
@@ -727,7 +762,7 @@ describe("ClineProvider.delegateParentAndOpenChild()", () => {
 		expect(durableParent.awaitingChildId).toBe("child-1")
 	})
 
-	it.each(["legacy", "pending", "resolved", "read-failure", "write-failure"] as const)(
+	it.each(["legacy", "pending", "flushed", "resolved", "read-failure", "write-failure"] as const)(
 		"rolls back without automatic action replay after a metadata failure (%s)",
 		async (scenario) => {
 			const persistError = new Error("parent metadata persist failed")
@@ -753,6 +788,21 @@ describe("ClineProvider.delegateParentAndOpenChild()", () => {
 					content: [{ type: "tool_use", id: "failed-action", name: "new_task", input: {} }],
 				},
 			]
+			if (scenario === "flushed") {
+				durableMessages[0].content = [
+					{ type: "tool_use", id: "earlier-action", name: "read_file", input: {} },
+					{ type: "tool_use", id: "failed-action", name: "new_task", input: {} },
+				]
+				durableMessages.push({
+					role: "user",
+					ts: 123,
+					messageId: "flushed-turn",
+					content: [
+						{ type: "tool_result", tool_use_id: "earlier-action", content: "File contents" },
+						{ type: "text", text: "Continue with the subtask" },
+					],
+				})
+			}
 			if (scenario === "resolved") {
 				durableMessages.push({
 					role: "user",
@@ -784,7 +834,14 @@ describe("ClineProvider.delegateParentAndOpenChild()", () => {
 					// A rehydrated Task must find a durable result before it can replay the action.
 					expect(durableMessages.at(-1)).toMatchObject({
 						role: "user",
-						content: [{ type: "tool_result", tool_use_id: pendingAction.actionId, is_error: true }],
+						content: expect.arrayContaining([
+							{
+								type: "tool_result",
+								tool_use_id: pendingAction.actionId,
+								is_error: true,
+								content: expect.any(String),
+							},
+						]),
 					})
 				}
 			})
@@ -842,8 +899,26 @@ describe("ClineProvider.delegateParentAndOpenChild()", () => {
 				expect(createTaskWithHistoryItem).toHaveBeenCalledExactlyOnceWith(historyItem)
 			}
 			expect(saveApiMessages).toHaveBeenCalledTimes(
-				scenario === "pending" || scenario === "write-failure" ? 1 : 0,
+				scenario === "pending" || scenario === "flushed" || scenario === "write-failure" ? 1 : 0,
 			)
+			if (scenario === "flushed") {
+				expect(durableMessages).toHaveLength(2)
+				expect(durableMessages[1]).toEqual({
+					role: "user",
+					ts: 123,
+					messageId: "flushed-turn",
+					content: [
+						{ type: "tool_result", tool_use_id: "earlier-action", content: "File contents" },
+						{
+							type: "tool_result",
+							tool_use_id: "failed-action",
+							content: "Subtask creation failed: parent metadata persist failed",
+							is_error: true,
+						},
+						{ type: "text", text: "Continue with the subtask" },
+					],
+				})
+			}
 			if (scenario === "pending") {
 				expect(durableMessages).toHaveLength(2)
 				expect(durableMessages[1]).toMatchObject({

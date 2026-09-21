@@ -4089,25 +4089,41 @@ export class ClineProvider
 							),
 					)
 					if (!hasResult) {
+						const result: Anthropic.ToolResultBlockParam = {
+							type: "tool_result",
+							tool_use_id: pendingActionId,
+							content: `Subtask creation failed: ${err instanceof Error ? err.message : String(err)}`,
+							is_error: true,
+						}
+						const toolUseIndex = messages.findIndex(
+							(message) =>
+								message.role === "assistant" &&
+								Array.isArray(message.content) &&
+								message.content.some(
+									(block) => block.type === "tool_use" && block.id === pendingActionId,
+								),
+						)
+						const nextMessage = toolUseIndex === -1 ? undefined : messages[toolUseIndex + 1]
+						if (nextMessage?.role === "user") {
+							const content =
+								typeof nextMessage.content === "string"
+									? [{ type: "text" as const, text: nextMessage.content }]
+									: [...nextMessage.content]
+							const firstNonTool = content.findIndex((block) => block.type !== "tool_result")
+							content.splice(firstNonTool === -1 ? content.length : firstNonTool, 0, result)
+							messages[toolUseIndex + 1] = { ...nextMessage, content }
+						} else {
+							messages.splice(toolUseIndex === -1 ? messages.length : toolUseIndex + 1, 0, {
+								role: "user",
+								ts: Date.now(),
+								content: [result],
+							})
+						}
 						await saveApiMessages({
 							taskId: parentTaskId,
 							globalStoragePath,
 							merge: true,
-							messages: [
-								...messages,
-								{
-									role: "user",
-									ts: Date.now(),
-									content: [
-										{
-											type: "tool_result",
-											tool_use_id: pendingActionId,
-											content: `Subtask creation failed: ${err instanceof Error ? err.message : String(err)}`,
-											is_error: true,
-										},
-									],
-								},
-							],
+							messages,
 						})
 					}
 				}
