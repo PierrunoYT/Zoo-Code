@@ -78,6 +78,7 @@ interface BedrockAdditionalModelFields {
 				// "summarized" shows thinking content in UI; omit to keep thinking internal only
 				display?: "summarized" | "none"
 		  }
+		| { type: "disabled" }
 	output_config?: {
 		// Claude 4.7+ effort levels: "low" | "medium" | "high" | "xhigh" | "max"
 		effort: string
@@ -487,6 +488,9 @@ export class AwsBedrockHandler extends BaseProvider implements SingleCompletionH
 				modelId: modelConfig.id,
 				thinking: additionalModelRequestFields?.thinking,
 			})
+		} else if (isAdaptiveThinkingModel && modelConfig.info.supportsReasoningBinary) {
+			// Omitting thinking can enable it by default (e.g. Sonnet 5).
+			additionalModelRequestFields = { thinking: { type: "disabled" } }
 		}
 
 		const inferenceConfig: BedrockInferenceConfig = {

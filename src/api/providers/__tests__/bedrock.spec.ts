@@ -1764,25 +1764,34 @@ describe("AwsBedrockHandler", () => {
 		})
 
 		it("should omit thinking and temperature for Claude Opus 4.8 when reasoning is disabled", async () => {
-			const opus48Handler = new AwsBedrockHandler({
+			const provider = new AwsBedrockHandler({
 				apiModelId: "anthropic.claude-opus-4-8",
-				awsAccessKey: "test-access-key",
-				awsSecretKey: "test-secret-key",
-				awsRegion: "us-east-1",
 				enableReasoningEffort: false,
 			})
+			await collectStream(provider.createMessage("System prompt", messages))
 
-			const generator = opus48Handler.createMessage("System prompt", messages)
-			await generator.next()
-
-			expect(mockConverseStreamCommand).toHaveBeenCalled()
-			const commandArg = mockConverseStreamCommand.mock.calls[0][0] as any
-
-			// Without reasoning enabled, no adaptive thinking payload is sent.
-			expect(commandArg.additionalModelRequestFields?.thinking).toBeUndefined()
-			// Temperature is still omitted for 4.8 because the API rejects sampling params.
+			const commandArg = mockConverseStreamCommand.mock.calls[0][0]
+			expect(commandArg.additionalModelRequestFields).not.toHaveProperty("thinking")
 			expect(commandArg.inferenceConfig?.temperature).toBeUndefined()
 		})
+
+		it.each(["anthropic.claude-sonnet-5", "anthropic.claude-opus-5"])(
+			"explicitly disables thinking for %s when reasoning is disabled",
+			async (apiModelId) => {
+				const provider = new AwsBedrockHandler({
+					apiModelId,
+					enableReasoningEffort: false,
+					modelMaxTokens: 32_000,
+				})
+				await collectStream(provider.createMessage("System prompt", messages))
+
+				const commandArg = mockConverseStreamCommand.mock.calls[0][0]
+				expect(commandArg.additionalModelRequestFields).toEqual(
+					expect.objectContaining({ thinking: { type: "disabled" } }),
+				)
+				expect(commandArg.inferenceConfig?.temperature).toBeUndefined()
+			},
+		)
 
 		it("should still send temperature and budget_tokens thinking for older Claude Opus 4.6", async () => {
 			// Regression guard: the adaptive-thinking branch must NOT activate for 4.6 or earlier.
