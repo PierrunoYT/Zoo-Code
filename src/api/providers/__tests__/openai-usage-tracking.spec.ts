@@ -291,6 +291,7 @@ describe("OpenAiHandler with usage tracking fix", () => {
 		["string", "10"],
 		["object", { tokens: 10 }],
 		["negative", -1],
+		["fractional", 10.5],
 		["non-finite", Number.POSITIVE_INFINITY],
 		["greater than prompt tokens", 101],
 	])("ignores invalid %s cached prompt tokens in streaming responses", async (_name, cachedTokens) => {
@@ -316,6 +317,7 @@ describe("OpenAiHandler with usage tracking fix", () => {
 		["string", "10"],
 		["object", { tokens: 10 }],
 		["negative", -1],
+		["fractional", 10.5],
 		["non-finite", Number.POSITIVE_INFINITY],
 		["greater than prompt tokens", 101],
 	])("ignores invalid %s cached prompt tokens in non-streaming responses", async (_name, cachedTokens) => {
@@ -334,4 +336,61 @@ describe("OpenAiHandler with usage tracking fix", () => {
 
 		expect(chunks).toContainEqual({ type: "usage", inputTokens: 100, outputTokens: 5 })
 	})
+
+	describe.each([true, false])("cache accounting with streaming=%s", (openAiStreamingEnabled) => {
+		it.each([
+			["authoritative count", 23, 23],
+			["authoritative zero", 0, undefined],
+			["fully cached prompt", 100, 100],
+			["null falls back", null, 71],
+			["absent falls back", undefined, 71],
+			["negative", -1, undefined],
+			["fractional", 10.5, undefined],
+			["infinite", Infinity, undefined],
+			["NaN", NaN, undefined],
+			["string", "23", undefined],
+			["object", { tokens: 23 }, undefined],
+			["exceeds input", 101, undefined],
+		])("respects %s without substituting a conflicting fallback", async (_name, reported, expected) => {
+			const cacheHandler = new OpenAiHandler({ ...mockOptions, openAiStreamingEnabled })
+			const usage = {
+				prompt_tokens: 100,
+				completion_tokens: 5,
+				cache_creation_input_tokens: 7,
+				cache_read_input_tokens: reported,
+				prompt_tokens_details: { cached_tokens: 71 },
+			}
+			mockCreate.mockResolvedValueOnce(
+				openAiStreamingEnabled
+					? asyncStreamFrom([{ choices: [], usage }])
+					: { choices: [{ message: { content: "Response" } }], usage },
+			)
+
+			const chunks = await collectStream(cacheHandler.createMessage("system prompt", []))
+
+			expect(chunks.filter((chunk) => chunk.type === "usage")).toEqual([
+				{
+					type: "usage",
+					inputTokens: 100,
+					outputTokens: 5,
+					cacheWriteTokens: 7,
+					cacheReadTokens: expected,
+				},
+			])
+		})
+	})
+
+	it.each([null, undefined, {}, { prompt_tokens_details: null }])(
+		"defaults missing non-streaming usage counters to zero: %j",
+		async (usage) => {
+			const nonStreamingHandler = new OpenAiHandler({ ...mockOptions, openAiStreamingEnabled: false })
+			mockCreate.mockResolvedValueOnce({ choices: [{ message: { content: "Response" } }], usage })
+
+			const chunks = await collectStream(nonStreamingHandler.createMessage("system prompt", []))
+
+			expect(chunks.filter((chunk) => chunk.type === "usage")).toEqual([
+				{ type: "usage", inputTokens: 0, outputTokens: 0 },
+			])
+		},
+	)
 })

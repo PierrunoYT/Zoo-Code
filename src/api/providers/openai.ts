@@ -298,6 +298,7 @@ export class OpenAiHandler extends BaseProvider implements SingleCompletionHandl
 		const cacheReadTokens =
 			typeof reportedCacheReadTokens === "number" &&
 			Number.isFinite(reportedCacheReadTokens) &&
+			Number.isInteger(reportedCacheReadTokens) &&
 			reportedCacheReadTokens >= 0 &&
 			reportedCacheReadTokens <= inputTokens
 				? reportedCacheReadTokens || undefined
