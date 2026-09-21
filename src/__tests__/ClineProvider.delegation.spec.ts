@@ -769,6 +769,7 @@ describe("ClineProvider.delegateParentAndOpenChild()", () => {
 			taskRegistry,
 			taskHistoryStore,
 			log: vi.fn(),
+			throwIfTaskRegistrationCancelled: ClineProvider.prototype["throwIfTaskRegistrationCancelled"],
 			performPreparationTasks: vi.fn(),
 			getState: vi.fn().mockResolvedValue({ mode: "code" }),
 		} as unknown as ClineProvider
