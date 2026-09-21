@@ -4,7 +4,7 @@ import { act, renderHook } from "@testing-library/react"
 import { usePromptHistory, type UsePromptHistoryReturn } from "../usePromptHistory"
 
 describe("usePromptHistory", () => {
-	it("resets navigation when switching to conversation history with identical prompts", () => {
+	it("preserves navigation for assistant-only streams and resets when identical conversation prompts appear", () => {
 		const prompt = "Explain this code"
 		const taskHistory: HistoryItem[] = [
 			{
@@ -30,13 +30,19 @@ describe("usePromptHistory", () => {
 					inputValue: "draft",
 					setInputValue,
 				}),
-			{ initialProps: { clineMessages: undefined } },
+			{ initialProps: { clineMessages: [] } },
 		)
 
 		act(() => {
 			result.current.setHistoryIndex(0)
 			result.current.setTempInput("draft")
 		})
+
+		expect(result.current.promptHistory).toEqual([prompt])
+		expect(result.current.historyIndex).toBe(0)
+		expect(result.current.tempInput).toBe("draft")
+
+		rerender({ clineMessages: [{ ts: 2, type: "say", say: "text", text: "Assistant output", partial: true }] })
 
 		expect(result.current.promptHistory).toEqual([prompt])
 		expect(result.current.historyIndex).toBe(0)

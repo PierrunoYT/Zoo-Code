@@ -38,28 +38,24 @@ export const usePromptHistory = ({
 	const [historyIndex, setHistoryIndex] = useState(-1)
 	const [tempInput, setTempInput] = useState("")
 	const [promptHistory, setPromptHistory] = useState<string[]>([])
-	const historySource = clineMessages?.length ? "conversation" : "task"
+	const conversationPrompts = useMemo(
+		() =>
+			clineMessages
+				?.filter((message) => message.type === "say" && message.say === "user_feedback" && message.text?.trim())
+				.map((message) => message.text!),
+		[clineMessages],
+	)
+	const historySource = conversationPrompts?.length ? "conversation" : "task"
 	const previousHistorySource = useRef(historySource)
 
-	// Initialize prompt history with hybrid approach: conversation messages if in task, otherwise task history
+	// Use conversation prompts when available, otherwise keep task history even during assistant-only streams.
 	const filteredPromptHistory = useMemo(() => {
-		// First try to get conversation messages (user_feedback from clineMessages)
-		const conversationPrompts = clineMessages
-			?.filter((message) => message.type === "say" && message.say === "user_feedback" && message.text?.trim())
-			.map((message) => message.text!)
-
 		// If we have conversation messages, use those (newest first when navigating up)
 		if (conversationPrompts?.length) {
 			return conversationPrompts.slice(-MAX_PROMPT_HISTORY_SIZE).reverse()
 		}
 
-		// If we have clineMessages array (meaning we're in an active task), don't fall back to task history
-		// Only use task history when starting fresh (no active conversation)
-		if (clineMessages?.length) {
-			return []
-		}
-
-		// Fall back to task history only when starting fresh (no active conversation)
+		// Fall back to task history until a conversation prompt exists.
 		if (!taskHistory?.length || !cwd) {
 			return []
 		}
@@ -69,7 +65,7 @@ export const usePromptHistory = ({
 			.filter((item) => item.task?.trim() && (!item.workspace || item.workspace === cwd))
 			.map((item) => item.task)
 			.slice(0, MAX_PROMPT_HISTORY_SIZE)
-	}, [clineMessages, taskHistory, cwd])
+	}, [conversationPrompts, taskHistory, cwd])
 
 	// Update prompt history when filtered history changes and reset navigation
 	useEffect(() => {
