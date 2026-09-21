@@ -366,6 +366,7 @@ describe("executeCommandTool", () => {
 			mockToolUse.params.cwd = "/missing/remote/workspace"
 			mockToolUse.nativeArgs = { command: "echo test", cwd: "/missing/remote/workspace" }
 			vi.mocked(fs.access).mockRejectedValueOnce(new Error("ENOENT"))
+			vi.mocked(formatResponse.toolError).mockReturnValueOnce("formatted missing-directory error")
 
 			await executeCommandTool.handle(mockCline as unknown as Task, mockToolUse, {
 				askApproval: mockAskApproval as unknown as AskApproval,
@@ -373,9 +374,10 @@ describe("executeCommandTool", () => {
 				pushToolResult: mockPushToolResult as unknown as PushToolResult,
 			})
 
-			expect(mockPushToolResult).toHaveBeenCalledWith(
-				formatResponse.toolError("Working directory '/missing/remote/workspace' does not exist."),
+			expect(formatResponse.toolError).toHaveBeenCalledExactlyOnceWith(
+				"Working directory '/missing/remote/workspace' does not exist.",
 			)
+			expect(mockPushToolResult).toHaveBeenCalledExactlyOnceWith("formatted missing-directory error")
 			expect(mockEnsureDcgInstalled).not.toHaveBeenCalled()
 			expect(mockRunDcg).not.toHaveBeenCalled()
 			expect(mockAskApproval).not.toHaveBeenCalled()
@@ -389,6 +391,7 @@ describe("executeCommandTool", () => {
 			mockToolUse.params.cwd = "/remote/workspace/file.txt"
 			mockToolUse.nativeArgs = { command: "echo test", cwd: "/remote/workspace/file.txt" }
 			vi.mocked(fs.stat).mockResolvedValueOnce({ isDirectory: () => false } as Stats)
+			vi.mocked(formatResponse.toolError).mockReturnValueOnce("formatted not-a-directory error")
 			await executeCommandTool.handle(mockCline as unknown as Task, mockToolUse, {
 				askApproval: mockAskApproval as unknown as AskApproval,
 				handleError: mockHandleError as unknown as HandleError,
@@ -396,9 +399,10 @@ describe("executeCommandTool", () => {
 			})
 
 			expect(fs.access).toHaveBeenCalledWith("/remote/workspace/file.txt")
-			expect(mockPushToolResult).toHaveBeenCalledWith(
-				formatResponse.toolError("Working directory '/remote/workspace/file.txt' is not a directory."),
+			expect(formatResponse.toolError).toHaveBeenCalledExactlyOnceWith(
+				"Working directory '/remote/workspace/file.txt' is not a directory.",
 			)
+			expect(mockPushToolResult).toHaveBeenCalledExactlyOnceWith("formatted not-a-directory error")
 			expect(mockEnsureDcgInstalled).not.toHaveBeenCalled()
 			expect(mockRunDcg).not.toHaveBeenCalled()
 			expect(mockAskApproval).not.toHaveBeenCalled()
