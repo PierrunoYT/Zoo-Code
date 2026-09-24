@@ -872,9 +872,13 @@ export class TaskHistoryStore {
 
 		try {
 			const raw = await fs.readFile(filePath, "utf8")
-			const item: HistoryItem = JSON.parse(raw)
-			if (!item?.id) throw new Error(`Invalid task history record: ${filePath}`)
-			return item
+			const item: unknown = JSON.parse(raw)
+			// Reject records that belong to another task (e.g. a copied task directory)
+			// so they can never replace this task's cached ownership.
+			if (typeof item !== "object" || item === null || (item as { id?: unknown }).id !== taskId) {
+				throw new Error(`Invalid task history record: ${filePath}`)
+			}
+			return item as HistoryItem
 		} catch (error) {
 			if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return null
 			throw error
