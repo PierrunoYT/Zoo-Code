@@ -30,6 +30,7 @@ import {
 	BEDROCK_DEFAULT_CONTEXT,
 	AWS_INFERENCE_PROFILE_MAPPING,
 	BEDROCK_1M_CONTEXT_MODEL_IDS,
+	BEDROCK_THINKING_DISABLE_MODEL_IDS,
 	BEDROCK_GLOBAL_INFERENCE_MODEL_IDS,
 	BEDROCK_SERVICE_TIER_MODEL_IDS,
 	BEDROCK_SERVICE_TIER_PRICING,
@@ -51,6 +52,7 @@ import { normalizeToolSchema } from "../../utils/json-schema"
 import { getSystemProxyUrl } from "../../utils/networkProxy"
 import type { SingleCompletionHandler, ApiHandlerCreateMessageMetadata, CompletePromptOptions } from "../index"
 import { mergeAbortSignalAndTimeout } from "./utils/abort-signal"
+import { OutputTokenLimitError } from "./utils/output-token-limit-error"
 
 /************************************************************************************
  *
@@ -488,8 +490,9 @@ export class AwsBedrockHandler extends BaseProvider implements SingleCompletionH
 				modelId: modelConfig.id,
 				thinking: additionalModelRequestFields?.thinking,
 			})
-		} else if (isAdaptiveThinkingModel && modelConfig.info.supportsReasoningBinary) {
-			// Omitting thinking can enable it by default (e.g. Sonnet 5).
+		} else if ((BEDROCK_THINKING_DISABLE_MODEL_IDS as readonly string[]).includes(baseModelId)) {
+			// Omitting thinking enables it by default on these models. Adaptive-only
+			// models (Fable 5/5.1, Opus 5.5) reject "disabled", so they keep the omit behavior.
 			additionalModelRequestFields = { thinking: { type: "disabled" } }
 		}
 
@@ -795,9 +798,7 @@ export class AwsBedrockHandler extends BaseProvider implements SingleCompletionH
 			}
 			// Bedrock sends usage metadata after messageStop. Preserve it before reporting truncation.
 			if (outputLimitReached) {
-				throw new Error(
-					"Output token limit reached. Consider increasing Max Output Tokens in the model settings.",
-				)
+				throw new OutputTokenLimitError()
 			}
 			// Clear timeout after stream completes
 			clearTimeout(timeoutId)
@@ -812,6 +813,12 @@ export class AwsBedrockHandler extends BaseProvider implements SingleCompletionH
 
 			// Check if this is a throttling error that should trigger retry logic
 			const errorType = this.getErrorType(error)
+
+			// Truncation is deterministic: rethrow as-is so the task loop can tell it apart
+			// from transient stream failures and skip the automatic retry.
+			if (error instanceof OutputTokenLimitError) {
+				throw error
+			}
 
 			// For throttling errors, throw immediately without yielding chunks
 			// This allows the retry mechanism in attemptApiRequest() to catch and handle it

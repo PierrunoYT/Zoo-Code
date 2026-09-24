@@ -674,6 +674,14 @@ export const BEDROCK_1M_CONTEXT_MODEL_IDS = [
 	"anthropic.claude-opus-4-8",
 ] as const
 
+// Amazon Bedrock models whose adaptive thinking is on by default and must be
+// turned off with an explicit `thinking: { type: "disabled" }`. Adaptive-only
+// models (Fable 5/5.1, Opus 5.5) reject that field with a 400, so they are
+// intentionally absent.
+// https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-sonnet-5.html
+// https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-5.html
+export const BEDROCK_THINKING_DISABLE_MODEL_IDS = ["anthropic.claude-sonnet-5", "anthropic.claude-opus-5"] as const
+
 // Amazon Bedrock models that support Global Inference profiles
 // As of Nov 2025, AWS supports Global Inference for:
 // - Claude Sonnet 4

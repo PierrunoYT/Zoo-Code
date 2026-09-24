@@ -72,6 +72,7 @@ import { makeCreateMessageMetadata } from "../../../test-utils/api"
 import { clearAllMocks } from "../../../test-utils/reset"
 import { asyncStreamFrom, collectStream } from "../../../test-utils/stream"
 import type { ApiStreamChunk } from "../../transform/stream"
+import { OutputTokenLimitError } from "../utils/output-token-limit-error"
 
 // Get access to the mocked functions
 const mockConverseStreamCommand = vi.mocked(ConverseStreamCommand)
@@ -113,7 +114,12 @@ describe("AwsBedrockHandler", () => {
 				}
 			}
 			if (stopReason === "max_tokens") {
-				await expect(consume()).rejects.toThrow(
+				const error = await consume().then(
+					() => undefined,
+					(e: unknown) => e,
+				)
+				expect(error).toBeInstanceOf(OutputTokenLimitError)
+				expect((error as Error).message).toContain(
 					"Output token limit reached. Consider increasing Max Output Tokens",
 				)
 			} else {
@@ -1810,7 +1816,7 @@ describe("AwsBedrockHandler", () => {
 			expect(commandArg.inferenceConfig?.temperature).toBeUndefined()
 		})
 
-		it.each(["anthropic.claude-sonnet-5", "anthropic.claude-opus-5"])(
+		it.each(["anthropic.claude-sonnet-5", "anthropic.claude-opus-5", "us.anthropic.claude-opus-5"])(
 			"explicitly disables thinking for %s when reasoning is disabled",
 			async (apiModelId) => {
 				const provider = new AwsBedrockHandler({
@@ -1827,6 +1833,25 @@ describe("AwsBedrockHandler", () => {
 				expect(commandArg.inferenceConfig?.temperature).toBeUndefined()
 			},
 		)
+
+		it.each([
+			"anthropic.claude-fable-5",
+			"anthropic.claude-fable-5-1",
+			"anthropic.claude-opus-5-5",
+			"global.anthropic.claude-opus-5-5",
+		])("omits thinking for adaptive-only %s when reasoning is disabled", async (apiModelId) => {
+			// These models reject thinking.type "disabled" with a 400.
+			const provider = new AwsBedrockHandler({
+				apiModelId,
+				enableReasoningEffort: false,
+				modelMaxTokens: 32_000,
+			})
+			await collectStream(provider.createMessage("System prompt", messages))
+
+			const commandArg = mockConverseStreamCommand.mock.calls[0][0]
+			expect(commandArg.additionalModelRequestFields ?? {}).not.toHaveProperty("thinking")
+			expect(commandArg.inferenceConfig?.temperature).toBeUndefined()
+		})
 
 		it("should still send temperature and budget_tokens thinking for older Claude Opus 4.6", async () => {
 			// Regression guard: the adaptive-thinking branch must NOT activate for 4.6 or earlier.
