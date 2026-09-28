@@ -1,4 +1,5 @@
 import fs from "fs/promises"
+import { constants as fsConstants } from "fs"
 import * as path from "path"
 import * as vscode from "vscode"
 
@@ -78,10 +79,18 @@ export function resolveAgentTimeoutMs(timeoutSeconds: number | null | undefined)
 
 async function commandWorkingDirectoryError(workingDirectory: string): Promise<string | undefined> {
 	try {
-		await fs.access(workingDirectory)
 		const stats = await fs.stat(workingDirectory)
-		return stats.isDirectory() ? undefined : `Working directory '${workingDirectory}' is not a directory.`
-	} catch {
+		if (!stats.isDirectory()) {
+			return `Working directory '${workingDirectory}' is not a directory.`
+		}
+		// X_OK on a directory checks search permission, which spawning with it as cwd requires.
+		await fs.access(workingDirectory, fsConstants.X_OK)
+		return undefined
+	} catch (error) {
+		const code = error && typeof error === "object" && "code" in error ? error.code : undefined
+		if (code === "EACCES" || code === "EPERM") {
+			return `Working directory '${workingDirectory}' is not accessible (permission denied).`
+		}
 		return `Working directory '${workingDirectory}' does not exist.`
 	}
 }

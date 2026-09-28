@@ -2,7 +2,7 @@
 
 import type { ToolUsage } from "@roo-code/types"
 import fs from "fs/promises"
-import type { Stats } from "fs"
+import { constants as fsConstants, type Stats } from "fs"
 import * as vscode from "vscode"
 
 import { Task } from "../../task/Task"
@@ -365,7 +365,7 @@ describe("executeCommandTool", () => {
 			provider.contextProxy.getValue.mockReturnValue(true)
 			mockToolUse.params.cwd = "/missing/remote/workspace"
 			mockToolUse.nativeArgs = { command: "echo test", cwd: "/missing/remote/workspace" }
-			vi.mocked(fs.access).mockRejectedValueOnce(new Error("ENOENT"))
+			vi.mocked(fs.stat).mockRejectedValueOnce(Object.assign(new Error("ENOENT"), { code: "ENOENT" }))
 			vi.mocked(formatResponse.toolError).mockReturnValueOnce("formatted missing-directory error")
 
 			await executeCommandTool.handle(mockCline as unknown as Task, mockToolUse, {
@@ -398,7 +398,8 @@ describe("executeCommandTool", () => {
 				pushToolResult: mockPushToolResult as unknown as PushToolResult,
 			})
 
-			expect(fs.access).toHaveBeenCalledWith("/remote/workspace/file.txt")
+			expect(fs.stat).toHaveBeenCalledWith("/remote/workspace/file.txt")
+			expect(fs.access).not.toHaveBeenCalled()
 			expect(formatResponse.toolError).toHaveBeenCalledExactlyOnceWith(
 				"Working directory '/remote/workspace/file.txt' is not a directory.",
 			)
@@ -408,6 +409,37 @@ describe("executeCommandTool", () => {
 			expect(mockAskApproval).not.toHaveBeenCalled()
 			expect(mockCline.didToolFailInCurrentTurn).toBe(true)
 		})
+
+		it.each(["EACCES", "EPERM"])(
+			"rejects a working directory without search permission (%s) before starting DCG",
+			async (code) => {
+				const provider = await mockCline.providerRef.deref()
+				provider.context = { globalStorageUri: { fsPath: "/test/storage" } }
+				provider.contextProxy.getValue.mockReturnValue(true)
+				mockToolUse.params.cwd = "/remote/locked"
+				mockToolUse.nativeArgs = { command: "echo test", cwd: "/remote/locked" }
+				vi.mocked(fs.stat).mockResolvedValueOnce({ isDirectory: () => true } as Stats)
+				vi.mocked(fs.access).mockRejectedValueOnce(Object.assign(new Error(code), { code }))
+				vi.mocked(formatResponse.toolError).mockReturnValueOnce("formatted permission error")
+
+				await executeCommandTool.handle(mockCline as unknown as Task, mockToolUse, {
+					askApproval: mockAskApproval as unknown as AskApproval,
+					handleError: mockHandleError as unknown as HandleError,
+					pushToolResult: mockPushToolResult as unknown as PushToolResult,
+				})
+
+				expect(fs.access).toHaveBeenCalledWith("/remote/locked", fsConstants.X_OK)
+				expect(formatResponse.toolError).toHaveBeenCalledExactlyOnceWith(
+					"Working directory '/remote/locked' is not accessible (permission denied).",
+				)
+				expect(mockPushToolResult).toHaveBeenCalledExactlyOnceWith("formatted permission error")
+				// Neither DCG nor the terminal (which starts only after approval) may start.
+				expect(mockEnsureDcgInstalled).not.toHaveBeenCalled()
+				expect(mockRunDcg).not.toHaveBeenCalled()
+				expect(mockAskApproval).not.toHaveBeenCalled()
+				expect(mockCline.didToolFailInCurrentTurn).toBe(true)
+			},
+		)
 
 		it("fails closed when the DCG install or update fails", async () => {
 			const provider = await mockCline.providerRef.deref()
