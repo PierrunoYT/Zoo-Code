@@ -109,6 +109,14 @@ describe("task lifecycle transitions", () => {
 		).toBe(false)
 		expect(isDeadDelegationChain({ ...child, status: "active" }, (id) => tasks.get(id))).toBe(false)
 		expect(isDeadDelegationChain({ ...child, awaitingChildId: "missing" }, (id) => tasks.get(id))).toBe(true)
+		// A missing record is not proof of death when its task still has a live owner.
+		expect(
+			isDeadDelegationChain(
+				{ ...child, awaitingChildId: "missing" },
+				(id) => tasks.get(id),
+				(id) => id === "missing",
+			),
+		).toBe(false)
 		expect(
 			isDeadDelegationChain({ ...child, awaitingChildId: child.id }, (id) =>
 				id === child.id ? child : undefined,

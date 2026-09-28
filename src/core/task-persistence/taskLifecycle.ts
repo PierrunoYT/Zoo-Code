@@ -91,8 +91,10 @@ export function isDeadDelegationChain(
 		if (current.status === "interrupted" || current.status === "completed") return true
 		if (current.status !== "delegated") return false
 		if (!current.awaitingChildId) return true
-		current = getTask(current.awaitingChildId)
-		if (!current) return true
+		const awaitedId: string = current.awaitingChildId
+		current = getTask(awaitedId)
+		// A missing record is not proof of death: the descendant may still run elsewhere.
+		if (!current) return !isTaskLive(awaitedId)
 	}
 }
 

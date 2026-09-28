@@ -128,6 +128,7 @@ import {
 	delegateTaskToChild,
 	isDeadDelegationChain,
 	recoverDeadDelegatedChild,
+	recoverDelegationParent,
 	interruptDelegatedChild,
 } from "../task-persistence"
 import { readTaskMessages } from "../task-persistence/taskMessages"
@@ -3835,7 +3836,8 @@ export class ClineProvider
 		let currentTaskId: string | undefined = taskId
 		while (currentTaskId && !visited.has(currentTaskId)) {
 			visited.add(currentTaskId)
-			await this.taskHistoryStore.invalidate(currentTaskId)
+			// Strict: an unreadable descendant must abort recovery, not look missing (and so dead).
+			await this.taskHistoryStore.refreshStrict(currentTaskId)
 			const current = this.taskHistoryStore.get(currentTaskId)
 			currentTaskId = current?.status === "delegated" ? current.awaitingChildId : undefined
 		}
@@ -4083,6 +4085,10 @@ export class ClineProvider
 		//    synchronously under the store lock) so a concurrent abandon or completion cannot
 		//    slip between the status snapshot and the write. An active child must never be
 		//    silently detached.
+		// Set once the parent record durably awaits this child, so rollback can undo that link
+		// even when disposal cancels delegation after the commit.
+		let parentCommitted = false
+		let pendingActionBeforeCommit: HistoryItem["pendingAction"]
 		try {
 			if (this._disposed) {
 				throw new Error("[delegateParentAndOpenChild] Provider was disposed before delegation commit")
@@ -4097,12 +4103,14 @@ export class ClineProvider
 					? this.taskHistoryStore.get(historyItem.awaitingChildId)?.status
 					: undefined
 				const delegated = delegateTaskToChild(historyItem, child.taskId, awaitedChildStatus)
+				pendingActionBeforeCommit = historyItem.pendingAction
 				return {
 					...delegated,
 					pendingAction:
 						delegated.pendingAction?.actionId === pendingActionId ? undefined : delegated.pendingAction,
 				}
 			})
+			parentCommitted = true
 			if (this._disposed) {
 				throw new Error("[delegateParentAndOpenChild] Provider was disposed before child scheduling")
 			}
@@ -4140,6 +4148,30 @@ export class ClineProvider
 						(cleanupError as Error)?.message ?? String(cleanupError)
 					}`,
 				)
+			}
+			if (parentCommitted) {
+				// Undo the committed link even on a disposed provider: otherwise the persisted parent
+				// awaits a deleted child until a later reconciliation repairs it.
+				try {
+					await this.taskHistoryStore.atomicReadAndUpdate(parentTaskId, (current) => {
+						if (current.status !== "delegated" || current.awaitingChildId !== child.taskId) {
+							return current // A newer transition already owns the parent.
+						}
+						const ancestor = current.parentTaskId
+							? this.taskHistoryStore.get(current.parentTaskId)
+							: undefined
+						return {
+							...recoverDelegationParent(current, ancestor),
+							pendingAction: pendingActionBeforeCommit,
+						}
+					})
+				} catch (repairError) {
+					this.log(
+						`[delegateParentAndOpenChild] Failed to release parent ${parentTaskId} from deleted child ${child.taskId}: ${
+							(repairError as Error)?.message ?? String(repairError)
+						}`,
+					)
+				}
 			}
 			if (!this._disposed) {
 				try {

@@ -819,6 +819,34 @@ export class TaskHistoryStore {
 	}
 
 	/**
+	 * Re-read a single task for an ownership decision. Unlike `invalidate()`, only a missing file
+	 * removes the cache entry; an unreadable, malformed, or mismatched record throws and keeps the
+	 * cached entry, so callers fail closed instead of treating the task as absent.
+	 */
+	async refreshStrict(taskId: string): Promise<void> {
+		return this.withLock(async () => {
+			const filePath = await this.getTaskFilePath(taskId)
+			let raw: string
+			try {
+				raw = await fs.readFile(filePath, "utf8")
+			} catch (error) {
+				if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+					this.cache.delete(taskId)
+					this.taskFileMtimes.delete(taskId)
+					return
+				}
+				throw error
+			}
+			const item: unknown = JSON.parse(raw)
+			if (typeof item !== "object" || item === null || (item as { id?: unknown }).id !== taskId) {
+				throw new Error(`Invalid task history record: ${filePath}`)
+			}
+			this.cache.set(taskId, item as HistoryItem)
+			this.taskFileMtimes.delete(taskId)
+		})
+	}
+
+	/**
 	 * Clear all in-memory cache entries; a subsequent `reconcile()` repopulates them from task files.
 	 */
 	async invalidateAll(): Promise<void> {
