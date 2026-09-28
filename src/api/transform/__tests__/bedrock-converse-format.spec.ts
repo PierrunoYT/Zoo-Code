@@ -50,7 +50,7 @@ describe("convertToBedrockConverseMessages", () => {
 		])
 	})
 
-	it("converts signed thinking blocks to Bedrock reasoning content", () => {
+	it("drops signatures issued by another provider when converting thinking blocks", () => {
 		const messages: Anthropic.Messages.MessageParam[] = [
 			{
 				role: "assistant",
@@ -64,16 +64,14 @@ describe("convertToBedrockConverseMessages", () => {
 			},
 		]
 
-		expect(convertToBedrockConverseMessages(messages)).toEqual([
+		// Bedrock never records signatures, so a stored one would fail Bedrock's verification.
+		expect(convertToBedrockConverseMessages(messages)).toStrictEqual([
 			{
 				role: "assistant",
 				content: [
 					{
 						reasoningContent: {
-							reasoningText: {
-								text: "I should inspect the file first.",
-								signature: "signed-reasoning",
-							},
+							reasoningText: { text: "I should inspect the file first." },
 						},
 					},
 				],

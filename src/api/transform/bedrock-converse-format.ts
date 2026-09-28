@@ -6,7 +6,6 @@ interface BedrockMessageContent {
 	type: "text" | "image" | "video" | "tool_use" | "tool_result" | "reasoning" | "thinking"
 	text?: string
 	thinking?: string
-	signature?: string
 	source?: {
 		type: "base64"
 		data: string | Uint8Array // string for Anthropic, Uint8Array for Bedrock
@@ -69,12 +68,12 @@ export function convertToBedrockConverseMessages(anthropicMessages: Anthropic.Me
 			}
 
 			if (messageBlock.type === "thinking" && typeof messageBlock.thinking === "string") {
+				// Bedrock does not capture its own signatures, so any stored signature was issued by
+				// another provider (e.g. MiniMax) and would fail Bedrock's verification. Unsigned
+				// reasoning is accepted (`signature` is optional), so replay the text only.
 				return {
 					reasoningContent: {
-						reasoningText: {
-							text: messageBlock.thinking,
-							...(messageBlock.signature ? { signature: messageBlock.signature } : {}),
-						},
+						reasoningText: { text: messageBlock.thinking },
 					},
 				} as ContentBlock
 			}
