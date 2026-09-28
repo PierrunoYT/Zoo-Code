@@ -4049,7 +4049,14 @@ export class ClineProvider
 									(block) => block.type === "tool_use" && block.id === pendingActionId,
 								),
 						)
-						const nextMessage = toolUseIndex === -1 ? undefined : messages[toolUseIndex + 1]
+						// A standalone tool_result with no owning tool_use is invalid API history that
+						// native tool-call providers reject; leave the parent for an explicit retry instead.
+						if (toolUseIndex === -1) {
+							throw new Error(
+								`[delegateParentAndOpenChild] Cannot resolve pending action ${pendingActionId}: no matching tool_use exists`,
+							)
+						}
+						const nextMessage = messages[toolUseIndex + 1]
 						if (nextMessage?.role === "user") {
 							const content =
 								typeof nextMessage.content === "string"
@@ -4059,7 +4066,7 @@ export class ClineProvider
 							content.splice(firstNonTool === -1 ? content.length : firstNonTool, 0, result)
 							messages[toolUseIndex + 1] = { ...nextMessage, content }
 						} else {
-							messages.splice(toolUseIndex === -1 ? messages.length : toolUseIndex + 1, 0, {
+							messages.splice(toolUseIndex + 1, 0, {
 								role: "user",
 								ts: Date.now(),
 								content: [result],

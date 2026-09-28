@@ -762,7 +762,7 @@ describe("ClineProvider.delegateParentAndOpenChild()", () => {
 		expect(durableParent.awaitingChildId).toBe("child-1")
 	})
 
-	it.each(["legacy", "pending", "flushed", "resolved", "read-failure", "write-failure"] as const)(
+	it.each(["legacy", "pending", "flushed", "resolved", "missing-tool-use", "read-failure", "write-failure"] as const)(
 		"rolls back without automatic action replay after a metadata failure (%s)",
 		async (scenario) => {
 			const persistError = new Error("parent metadata persist failed")
@@ -802,6 +802,10 @@ describe("ClineProvider.delegateParentAndOpenChild()", () => {
 						{ type: "text", text: "Continue with the subtask" },
 					],
 				})
+			}
+			if (scenario === "missing-tool-use") {
+				// No owning tool_use: a standalone tool_result would be rejected by native tool-call providers.
+				durableMessages = []
 			}
 			if (scenario === "resolved") {
 				durableMessages.push({
@@ -893,7 +897,7 @@ describe("ClineProvider.delegateParentAndOpenChild()", () => {
 			expect(removeClineFromStack).toHaveBeenNthCalledWith(1)
 			expect(removeClineFromStack).toHaveBeenNthCalledWith(2)
 			expect(deleteTaskWithId).toHaveBeenCalledWith("child-1", false)
-			if (scenario === "read-failure" || scenario === "write-failure") {
+			if (scenario === "read-failure" || scenario === "write-failure" || scenario === "missing-tool-use") {
 				expect(createTaskWithHistoryItem).not.toHaveBeenCalled()
 			} else {
 				expect(createTaskWithHistoryItem).toHaveBeenCalledExactlyOnceWith(historyItem)

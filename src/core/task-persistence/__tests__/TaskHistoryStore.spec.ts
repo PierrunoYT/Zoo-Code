@@ -127,7 +127,13 @@ describe("TaskHistoryStore", () => {
 				await expect(store.invalidate("owner")).resolves.toBeUndefined()
 				expect(store.get("owner")).toBeUndefined()
 			} else {
-				await expect(store.invalidate("owner")).rejects.toThrow()
+				await expect(store.invalidate("owner")).rejects.toMatchObject(
+					scenario === "read-error"
+						? { code: "EISDIR" }
+						: scenario === "malformed"
+							? { name: "SyntaxError" }
+							: { message: expect.stringContaining("Invalid task history record") },
+				)
 				expect(store.get("owner")).toEqual(owner)
 			}
 		})
