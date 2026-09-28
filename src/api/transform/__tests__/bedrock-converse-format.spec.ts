@@ -36,7 +36,7 @@ describe("convertToBedrockConverseMessages", () => {
 			},
 		] as unknown as Anthropic.Messages.MessageParam[]
 
-		expect(convertToBedrockConverseMessages(messages)).toEqual([
+		expect(convertToBedrockConverseMessages(messages, { preserveReasoning: true })).toEqual([
 			{
 				role: "assistant",
 				content: [
@@ -47,6 +47,28 @@ describe("convertToBedrockConverseMessages", () => {
 					},
 				],
 			},
+		])
+	})
+
+	it("drops reasoning and thinking blocks for models that do not preserve reasoning", () => {
+		// Signed thinking bypasses Task's reasoning filter, so the converter must not send it to e.g. Claude.
+		const messages = [
+			{
+				role: "assistant",
+				content: [
+					{ type: "thinking", thinking: "Signed elsewhere.", signature: "minimax-signature" },
+					{ type: "text", text: "Reading the file." },
+				],
+			},
+			{
+				role: "assistant",
+				content: [{ type: "reasoning", text: "Reasoning only.", summary: [] }],
+			},
+		] as unknown as Anthropic.Messages.MessageParam[]
+
+		expect(convertToBedrockConverseMessages(messages)).toStrictEqual([
+			{ role: "assistant", content: [{ text: "Reading the file." }] },
+			{ role: "assistant", content: [{ text: "" }] },
 		])
 	})
 
@@ -65,7 +87,7 @@ describe("convertToBedrockConverseMessages", () => {
 		]
 
 		// Bedrock never records signatures, so a stored one would fail Bedrock's verification.
-		expect(convertToBedrockConverseMessages(messages)).toStrictEqual([
+		expect(convertToBedrockConverseMessages(messages, { preserveReasoning: true })).toStrictEqual([
 			{
 				role: "assistant",
 				content: [
@@ -88,7 +110,7 @@ describe("convertToBedrockConverseMessages", () => {
 			},
 		] as unknown as Anthropic.Messages.MessageParam[]
 
-		expect(convertToBedrockConverseMessages(messages)).toStrictEqual([
+		expect(convertToBedrockConverseMessages(messages, { preserveReasoning: true })).toStrictEqual([
 			{
 				role: "assistant",
 				content: [
