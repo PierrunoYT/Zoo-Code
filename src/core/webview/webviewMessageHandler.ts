@@ -1116,7 +1116,11 @@ export const webviewMessageHandler = async (
 					requestId: message.requestId,
 					bedrockModels,
 				})
-			} catch {
+			} catch (error) {
+				// Keep the underlying cause (IAM denial, network, wrong region) diagnosable in the output channel.
+				provider.log(
+					`Bedrock catalogue discovery failed: ${error instanceof Error ? `${error.name}: ${error.message}` : String(error)}`,
+				)
 				await provider.postMessageToWebview({
 					type: BedrockModelsMessageType.bedrockModels,
 					requestId: message.requestId,

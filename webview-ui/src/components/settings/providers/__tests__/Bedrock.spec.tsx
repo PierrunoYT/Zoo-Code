@@ -111,6 +111,21 @@ describe("Bedrock Component", () => {
 		expect(mockSetApiConfigurationField).not.toHaveBeenCalled()
 	})
 
+	it("shows a placeholder and ARN guidance while the custom ARN is still empty", () => {
+		render(
+			<Bedrock
+				apiConfiguration={{
+					apiModelId: "custom-arn",
+					awsRegion: "eu-west-3",
+					awsUseCrossRegionInference: true,
+				}}
+				setApiConfigurationField={mockSetApiConfigurationField}
+			/>,
+		)
+		expect(screen.getByTestId("bedrock-request-model").querySelector("code")?.textContent).toBe("—")
+		expect(screen.getByText("settings:providers.awsArnRouting")).toBeInTheDocument()
+	})
+
 	it.each<[OrganizationAllowList, boolean]>([
 		[{ allowAll: true, providers: {} }, true],
 		[{ allowAll: false, providers: { bedrock: { allowAll: true } } }, true],
@@ -148,7 +163,8 @@ describe("Bedrock Component", () => {
 				}),
 			),
 		)
-		fireEvent.change(screen.getByLabelText("settings:providers.awsCatalogSelect"), { target: { value: arn } })
+		const catalogSelect = screen.getByRole("option", { name: /Discovered/ }).closest("select")!
+		fireEvent.change(catalogSelect, { target: { value: arn } })
 		expect(mockSetApiConfigurationField.mock.calls).toEqual([
 			["apiModelId", "custom-arn"],
 			["awsCustomArn", arn],

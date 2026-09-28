@@ -424,6 +424,7 @@ export class AwsBedrockHandler extends BaseProvider implements SingleCompletionH
 			}
 		},
 	): ApiStream {
+		this.assertCustomArnProvided()
 		const modelConfig = this.getModel()
 		const usePromptCache = Boolean(
 			(this.options.awsUsePromptCache ?? true) && this.supportsAwsPromptCache(modelConfig),
@@ -876,6 +877,7 @@ export class AwsBedrockHandler extends BaseProvider implements SingleCompletionH
 	}
 
 	async completePrompt(prompt: string, options?: CompletePromptOptions): Promise<string> {
+		this.assertCustomArnProvided()
 		try {
 			const modelConfig = this.getModel()
 
@@ -1160,6 +1162,13 @@ export class AwsBedrockHandler extends BaseProvider implements SingleCompletionH
 
 		// Return the model ID as-is for all other cases
 		return modelId
+	}
+
+	// "custom-arn" is a picker sentinel, not a Bedrock model ID; never send it as ConverseCommand.modelId.
+	private assertCustomArnProvided(): void {
+		if (this.options.apiModelId === "custom-arn" && !this.options.awsCustomArn?.trim()) {
+			throw new Error("Enter a custom ARN in the Amazon Bedrock settings, or select a model from the list.")
+		}
 	}
 
 	//Prompt Router responses come back in a different sequence and the model used is in the response and must be fetched by name

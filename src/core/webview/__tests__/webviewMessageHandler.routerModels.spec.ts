@@ -125,6 +125,21 @@ describe("webviewMessageHandler - requestRouterModels provider filter", () => {
 		})
 	})
 
+	it("logs the underlying Bedrock discovery failure for diagnosis", async () => {
+		const error = new Error("User is not authorized to perform: bedrock:ListInferenceProfiles")
+		error.name = "AccessDeniedException"
+		getBedrockCatalogMock.mockRejectedValue(error)
+		await webviewMessageHandler(mockProvider, {
+			type: BedrockModelsMessageType.requestBedrockModels,
+			requestId: "denied",
+		})
+		expect(mockProvider.log).toHaveBeenCalledWith(
+			expect.stringContaining(
+				"AccessDeniedException: User is not authorized to perform: bedrock:ListInferenceProfiles",
+			),
+		)
+	})
+
 	it("returns a correlated, sanitized Bedrock discovery failure", async () => {
 		getBedrockCatalogMock.mockRejectedValue(new Error("secret credential detail"))
 		await webviewMessageHandler(mockProvider, {

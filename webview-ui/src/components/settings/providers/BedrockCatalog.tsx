@@ -7,6 +7,7 @@ import {
 } from "@roo-code/types"
 import { vscode } from "@/utils/vscode"
 import { Button } from "@/components/ui/button"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@src/components/ui"
 import { useAppTranslation } from "@src/i18n/TranslationContext"
 
 export function BedrockCatalog({
@@ -85,20 +86,23 @@ export function BedrockCatalog({
 					<label className="text-sm" htmlFor="bedrock-catalog">
 						{t("settings:providers.awsCatalogSelect")}
 					</label>
-					<select
-						id="bedrock-catalog"
-						className="w-full min-w-0 bg-vscode-dropdown-background text-vscode-dropdown-foreground"
-						value=""
-						onChange={(event) => onSelect(event.target.value)}>
-						<option value="" disabled>
-							{t(models.length ? "settings:common.select" : "settings:providers.awsCatalogEmpty")}
-						</option>
-						{models.map((model) => (
-							<option key={model.arn} value={model.arn}>
-								{model.name} — {t(`settings:providers.awsCatalogKinds.${model.kind}`)}
-							</option>
-						))}
-					</select>
+					{/* Empty value keeps the placeholder visible: picking an entry fills the custom ARN field. */}
+					<Select value="" onValueChange={onSelect} disabled={!models.length}>
+						<SelectTrigger id="bedrock-catalog" className="w-full">
+							<SelectValue
+								placeholder={t(
+									models.length ? "settings:common.select" : "settings:providers.awsCatalogEmpty",
+								)}
+							/>
+						</SelectTrigger>
+						<SelectContent>
+							{models.map((model) => (
+								<SelectItem key={model.arn} value={model.arn}>
+									{model.name} — {t(`settings:providers.awsCatalogKinds.${model.kind}`)}
+								</SelectItem>
+							))}
+						</SelectContent>
+					</Select>
 				</>
 			)}
 		</div>

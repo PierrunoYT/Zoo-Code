@@ -564,7 +564,7 @@
 		"awsCatalogSelect": "Modelli regionali e profili di inferenza",
 		"awsCatalogEmpty": "Nessun modello di testo in streaming o profilo attivo restituito",
 		"awsCatalogKinds": {
-			"regional": "Modello di base — verifica i requisiti del profilo di inferenza",
+			"regional": "Modello di base — on demand in questa regione, nessun profilo di inferenza necessario",
 			"geographic": "Profilo di inferenza geografico",
 			"global": "Profilo di inferenza globale — mondiale",
 			"application": "Profilo applicativo — verifica le destinazioni in AWS"

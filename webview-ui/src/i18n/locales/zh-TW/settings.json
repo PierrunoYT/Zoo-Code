@@ -591,7 +591,7 @@
 		"awsCatalogSelect": "區域模型和推論設定檔",
 		"awsCatalogEmpty": "未傳回串流文字模型或使用中的設定檔",
 		"awsCatalogKinds": {
-			"regional": "基礎模型 — 請檢查推論設定檔需求",
+			"regional": "基礎模型 — 在此區域隨選可用，無需推論設定檔",
 			"geographic": "地理推論設定檔",
 			"global": "全域推論設定檔 — 全球",
 			"application": "應用程式設定檔 — 請在 AWS 中檢查目的地"

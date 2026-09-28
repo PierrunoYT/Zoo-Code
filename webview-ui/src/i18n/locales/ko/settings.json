@@ -564,7 +564,7 @@
 		"awsCatalogSelect": "리전별 모델 및 추론 프로필",
 		"awsCatalogEmpty": "스트리밍 텍스트 모델이나 활성 프로필이 반환되지 않았습니다",
 		"awsCatalogKinds": {
-			"regional": "기반 모델 — 추론 프로필 요구 사항 확인",
+			"regional": "기반 모델 — 이 리전에서 온디맨드, 추론 프로필 불필요",
 			"geographic": "지리적 추론 프로필",
 			"global": "글로벌 추론 프로필 — 전 세계",
 			"application": "애플리케이션 프로필 — AWS에서 대상 확인"

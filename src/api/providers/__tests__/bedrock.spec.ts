@@ -122,6 +122,17 @@ describe("AwsBedrockHandler", () => {
 		expect(provider.getModel().info.supportsReasoningBudget).not.toBe(true)
 	})
 
+	it("rejects the custom-arn sentinel before sending a request when no ARN is entered", async () => {
+		const provider = new AwsBedrockHandler({ apiModelId: "custom-arn", awsRegion: "eu-west-3" })
+		const send = vi.fn()
+		provider["client"].send = send
+		await expect(
+			collectStream(provider.createMessage("system", [{ role: "user", content: "hello" }])),
+		).rejects.toThrow("Enter a custom ARN")
+		await expect(provider.completePrompt("hello")).rejects.toThrow("Enter a custom ARN")
+		expect(send).not.toHaveBeenCalled()
+	})
+
 	it.each(["max_tokens", "end_turn", "tool_use", "stop_sequence"])(
 		"reports truncation only for %s, after preserving usage",
 		async (stopReason) => {

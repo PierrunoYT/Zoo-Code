@@ -43,16 +43,20 @@ export const Bedrock = ({
 		organizationAllowList.allowAll ||
 		organizationAllowList.providers[providerIdentifiers.bedrock]?.allowAll
 	const customArn = apiConfiguration.awsCustomArn
-	const requestModelId = customArn
-		? customArn.includes(":foundation-model/")
-			? getBedrockInferenceModelId(customArn.split(":foundation-model/")[1])
-			: customArn
-		: getBedrockInferenceModelId(
-				apiConfiguration.apiModelId || bedrockDefaultModelId,
-				apiConfiguration.awsRegion,
-				apiConfiguration.awsUseCrossRegionInference,
-				apiConfiguration.awsUseGlobalInference,
-			)
+	// The "custom-arn" sentinel is not a request model ID; show a placeholder until an ARN is entered.
+	const awaitingArn = !customArn && apiConfiguration.apiModelId === "custom-arn"
+	const requestModelId = awaitingArn
+		? "—"
+		: customArn
+			? customArn.includes(":foundation-model/")
+				? getBedrockInferenceModelId(customArn.split(":foundation-model/")[1])
+				: customArn
+			: getBedrockInferenceModelId(
+					apiConfiguration.apiModelId || bedrockDefaultModelId,
+					apiConfiguration.awsRegion,
+					apiConfiguration.awsUseCrossRegionInference,
+					apiConfiguration.awsUseGlobalInference,
+				)
 
 	// Check if the selected model supports 1M context (supported Claude 4 models)
 	const supports1MContextBeta =
@@ -235,7 +239,11 @@ export const Bedrock = ({
 				{t("settings:providers.awsRequestModelId")} <code>{requestModelId}</code>
 			</div>
 			<div className="text-sm text-vscode-descriptionForeground">
-				{t(customArn ? "settings:providers.awsArnRouting" : "settings:providers.awsBundledModels")}
+				{t(
+					customArn || awaitingArn
+						? "settings:providers.awsArnRouting"
+						: "settings:providers.awsBundledModels",
+				)}
 			</div>
 			{allowCatalog && (
 				<BedrockCatalog

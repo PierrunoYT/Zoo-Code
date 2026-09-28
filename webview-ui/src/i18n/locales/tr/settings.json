@@ -564,7 +564,7 @@
 		"awsCatalogSelect": "Bölgesel modeller ve çıkarım profilleri",
 		"awsCatalogEmpty": "Akış destekli metin modeli veya etkin profil döndürülmedi",
 		"awsCatalogKinds": {
-			"regional": "Temel model — çıkarım profili gereksinimlerini kontrol edin",
+			"regional": "Temel model — bu bölgede isteğe bağlı, çıkarım profili gerekmez",
 			"geographic": "Coğrafi çıkarım profili",
 			"global": "Küresel çıkarım profili — dünya çapında",
 			"application": "Uygulama profili — AWS'de hedefleri kontrol edin"

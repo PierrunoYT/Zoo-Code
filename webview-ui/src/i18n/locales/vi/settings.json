@@ -564,7 +564,7 @@
 		"awsCatalogSelect": "Mô hình theo vùng và hồ sơ suy luận",
 		"awsCatalogEmpty": "Không có mô hình văn bản phát trực tuyến hoặc hồ sơ đang hoạt động được trả về",
 		"awsCatalogKinds": {
-			"regional": "Mô hình nền tảng — kiểm tra yêu cầu về hồ sơ suy luận",
+			"regional": "Mô hình nền tảng — theo yêu cầu trong vùng này, không cần hồ sơ suy luận",
 			"geographic": "Hồ sơ suy luận theo địa lý",
 			"global": "Hồ sơ suy luận toàn cầu — toàn thế giới",
 			"application": "Hồ sơ ứng dụng — kiểm tra các đích trong AWS"

@@ -564,7 +564,7 @@
 		"awsCatalogSelect": "Models regionals i perfils d'inferència",
 		"awsCatalogEmpty": "No s'han retornat models de text en streaming ni perfils actius",
 		"awsCatalogKinds": {
-			"regional": "Model fundacional — comprova els requisits de perfil d'inferència",
+			"regional": "Model fundacional — sota demanda en aquesta regió, no cal cap perfil d'inferència",
 			"geographic": "Perfil d'inferència geogràfic",
 			"global": "Perfil d'inferència global — mundial",
 			"application": "Perfil d'aplicació — comprova les destinacions a AWS"

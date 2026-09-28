@@ -4,6 +4,29 @@ import { vscode } from "@/utils/vscode"
 import { BedrockCatalog } from "../BedrockCatalog"
 
 vi.mock("@/utils/vscode", () => ({ vscode: { postMessage: vi.fn() } }))
+// Radix Select needs pointer APIs JSDOM lacks; a native select keeps the value wiring testable.
+vi.mock("@src/components/ui", () => ({
+	Select: ({
+		children,
+		value,
+		onValueChange,
+	}: {
+		children: React.ReactNode
+		value: string
+		onValueChange: (value: string) => void
+	}) => (
+		<select value={value} onChange={(event) => onValueChange(event.target.value)}>
+			<option value="" disabled />
+			{children}
+		</select>
+	),
+	SelectContent: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+	SelectItem: ({ children, value }: { children: React.ReactNode; value: string }) => (
+		<option value={value}>{children}</option>
+	),
+	SelectTrigger: () => null,
+	SelectValue: () => null,
+}))
 
 beforeEach(() => vi.clearAllMocks())
 

@@ -564,7 +564,7 @@
 		"awsCatalogSelect": "Modele regionalne i profile wnioskowania",
 		"awsCatalogEmpty": "Nie zwrócono modeli tekstowych ze strumieniowaniem ani aktywnych profili",
 		"awsCatalogKinds": {
-			"regional": "Model bazowy — sprawdź wymagania profilu wnioskowania",
+			"regional": "Model bazowy — na żądanie w tym regionie, profil wnioskowania nie jest wymagany",
 			"geographic": "Geograficzny profil wnioskowania",
 			"global": "Globalny profil wnioskowania — cały świat",
 			"application": "Profil aplikacji — sprawdź regiony docelowe w AWS"
