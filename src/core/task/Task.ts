@@ -7,6 +7,7 @@ import EventEmitter from "events"
 
 import { AskIgnoredError } from "./AskIgnoredError"
 import { RateLimitClock, createRateLimitClock } from "./RateLimitClock"
+import { ReasoningLoopDetector, RepetitiveReasoningError } from "./ReasoningLoopDetector"
 
 import { Anthropic } from "@anthropic-ai/sdk"
 import OpenAI from "openai"
@@ -3267,6 +3268,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 				})
 				let assistantMessage = ""
 				let reasoningMessage = ""
+				const reasoningLoopDetector = new ReasoningLoopDetector()
 				const pendingGroundingSources: GroundingSource[] = []
 				this.isStreaming = true
 
@@ -3312,6 +3314,10 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 
 						switch (chunk.type) {
 							case "reasoning": {
+								if (reasoningLoopDetector.add(chunk.text)) {
+									this.cancelCurrentRequest()
+									throw new RepetitiveReasoningError()
+								}
 								reasoningMessage += chunk.text
 								// Only apply formatting if the message contains sentence-ending punctuation followed by **
 								let formattedReasoning = reasoningMessage
@@ -3719,8 +3725,11 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 							// ??= keeps the first reason; a cancel can land during abortStream after cancelReason was already computed.
 							this.abortReason ??= "user_cancelled"
 							await this.abortTask()
-						} else if (error instanceof OutputTokenLimitError) {
-							// Truncation repeats on an identical request, so never auto-retry it
+						} else if (
+							error instanceof OutputTokenLimitError ||
+							error instanceof RepetitiveReasoningError
+						) {
+							// These failures repeat on an identical request, so never auto-retry them
 							// (even with auto-approval); let the user decide once.
 							const { response } = await this.ask("api_req_failed", rawErrorMessage)
 

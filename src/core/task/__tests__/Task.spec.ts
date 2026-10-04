@@ -575,6 +575,45 @@ describe("Cline", () => {
 		})
 	})
 
+	describe("repetitive reasoning mid-stream", () => {
+		it("cancels the request and asks once instead of auto-retrying", async () => {
+			vi.spyOn(mockProvider, "getState").mockResolvedValue(
+				providerStateWith({ autoApprovalEnabled: true, requestDelaySeconds: 0 }),
+			)
+			const task = new Task({
+				provider: mockProvider,
+				apiConfiguration: mockApiConfig,
+				task: "test task",
+				startTask: false,
+			})
+			vi.spyOn(task.diffViewProvider, "reset").mockResolvedValue(undefined)
+			vi.spyOn(getTaskTestAccess(task), "safeEnsureModelFetched").mockResolvedValue(stubModelInfo)
+			vi.spyOn(getTaskTestAccess(task), "presentAssistantMessageSafe").mockImplementation(() => {})
+			const askSpy = vi
+				.spyOn(task, "ask")
+				.mockResolvedValue({ response: "noButtonClicked" } satisfies TaskAskResult)
+			const cancelSpy = vi.spyOn(task, "cancelCurrentRequest")
+			const cycle =
+				"OK.\n\nHmm. Let me read them.\n\nOK.\n\nHmm. Let me just do it.\n\nLet me read the files.\n\n"
+			const attemptApiRequestSpy = vi
+				.spyOn(task, "attemptApiRequest")
+				.mockImplementation(() =>
+					asyncStreamFrom<ApiStreamChunk>(
+						Array.from({ length: 8 }, () => ({ type: "reasoning" as const, text: cycle })),
+					),
+				)
+
+			await task.recursivelyMakeClineRequests([{ type: "text", text: "long request" }])
+
+			expect(cancelSpy).toHaveBeenCalledOnce()
+			expect(attemptApiRequestSpy).toHaveBeenCalledOnce()
+			expect(askSpy).toHaveBeenCalledWith(
+				"api_req_failed",
+				expect.stringContaining("Repetitive reasoning detected"),
+			)
+		})
+	})
+
 	describe("native tool-call request isolation", () => {
 		it("keeps overlapping Task parser state scoped to each request", async () => {
 			const firstTask = new Task({

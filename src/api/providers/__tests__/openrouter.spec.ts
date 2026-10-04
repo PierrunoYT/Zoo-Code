@@ -298,6 +298,25 @@ describe("OpenRouterHandler", () => {
 			)
 		})
 
+		it("passes the request abort signal to the OpenAI SDK", async () => {
+			const handler = new OpenRouterHandler(mockOptions)
+			const mockCreate = vitest.fn().mockResolvedValue(asyncStreamFrom([]))
+			Object.defineProperty(OpenAI.prototype, "chat", {
+				configurable: true,
+				value: { completions: { create: mockCreate } },
+			})
+			const controller = new AbortController()
+
+			await collectStream(
+				handler.createMessage("test", [], { taskId: "test-task", abortSignal: controller.signal }),
+			)
+
+			expect(mockCreate).toHaveBeenCalledWith(
+				expect.any(Object),
+				expect.objectContaining({ signal: controller.signal }),
+			)
+		})
+
 		it("adds cache control for supported models", async () => {
 			const handler = new OpenRouterHandler(
 				makeApiHandlerOptions({
