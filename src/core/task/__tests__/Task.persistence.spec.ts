@@ -125,6 +125,7 @@ vi.mock("../../task-persistence", async (importOriginal) => {
 				delete: vi.fn().mockResolvedValue(undefined),
 				deleteMany: vi.fn().mockResolvedValue(undefined),
 				reconcile: vi.fn().mockResolvedValue(undefined),
+				resumeInterruptedTask: vi.fn().mockResolvedValue({ id: "test-id", status: "active" }),
 				initialized: Promise.resolve(),
 			}
 		}),
@@ -297,6 +298,7 @@ describe("Task persistence", () => {
 		mockProvider.postStateToWebview = vi.fn().mockResolvedValue(undefined)
 		mockProvider.postStateToWebviewWithoutTaskHistory = vi.fn().mockResolvedValue(undefined)
 		mockProvider.updateTaskHistory = vi.fn().mockResolvedValue(undefined)
+		mockProvider.resumeInterruptedTask = vi.fn().mockResolvedValue(undefined)
 		mockProvider.log = vi.fn()
 	})
 
@@ -1201,6 +1203,40 @@ describe("Task persistence", () => {
 	// ── resumeTaskFromHistory — interrupted tool calls must be recorded as errors ──
 
 	describe("resumeTaskFromHistory interrupted tool calls", () => {
+		it("durably activates an interrupted task after the user accepts resume", async () => {
+			mockReadTaskMessages.mockResolvedValue([])
+			mockReadApiMessages.mockResolvedValue([{ role: "user", content: "Continue" }])
+			mockProvider.taskHistoryStore.get = vi.fn().mockReturnValue({
+				id: "interrupted-child-resume",
+				status: "interrupted",
+			})
+			const task = new Task({
+				provider: mockProvider,
+				apiConfiguration: mockApiConfig,
+				historyItem: {
+					id: "interrupted-child-resume",
+					number: 1,
+					ts: 1,
+					task: "Interrupted child",
+					tokensIn: 0,
+					tokensOut: 0,
+					totalCost: 0,
+					status: "interrupted",
+					parentTaskId: "parent",
+				},
+				startTask: false,
+			})
+			vi.spyOn(task, "ask").mockResolvedValue({ response: "yesButtonClicked" })
+			const initiateTaskLoop = vi
+				.spyOn(getTaskPersistenceAccess(task), "initiateTaskLoop")
+				.mockResolvedValue(undefined)
+
+			await getTaskPersistenceAccess(task).resumeTaskFromHistory()
+
+			expect(mockProvider.resumeInterruptedTask).toHaveBeenCalledWith("interrupted-child-resume", "parent")
+			expect(initiateTaskLoop).toHaveBeenCalledOnce()
+		})
+
 		const interruptedToolResultContent = "Task was interrupted before this tool call could be completed."
 
 		it("marks synthetic tool_results from an interrupted assistant turn as errors", async () => {

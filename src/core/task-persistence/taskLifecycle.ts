@@ -25,6 +25,18 @@ export function assertValidTransition(from: HistoryItemStatus | undefined, to: H
 }
 
 /**
+ * Reactivates a task only through the explicit user-resume path. This is kept
+ * outside VALID_TASK_STATUS_TRANSITIONS so generic stale writes cannot revive
+ * an interrupted task.
+ */
+export function resumeInterruptedTask(task: HistoryItem): HistoryItem {
+	if (task.status !== "interrupted") {
+		throw new LifecycleTransitionError(`Cannot resume task ${task.id} with status ${task.status ?? "active"}`)
+	}
+	return { ...task, status: "active" }
+}
+
+/**
  * Settles the pending create_subtask action whose delegation the authoritative
  * parent record rejected (#1714). Only the exact matching action ID is cleared;
  * status, lineage, accounting, and unrelated fields are preserved. A replaced

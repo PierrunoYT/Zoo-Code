@@ -2981,6 +2981,16 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 			this.isInitialized = true
 
 			const { response, text, images } = await this.ask(askType) // Calls `postStateToWebview`.
+			if (this.abort || this.abandoned) {
+				return
+			}
+			if (this.initialStatus === "interrupted") {
+				const provider = this.providerRef.deref()
+				if (!provider) {
+					throw new Error(`[Task#resumeTaskFromHistory] Provider unavailable for task ${this.taskId}`)
+				}
+				await provider.resumeInterruptedTask(this.taskId, this.parentTaskId)
+			}
 
 			let responseText: string | undefined
 			let responseImages: string[] | undefined

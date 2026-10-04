@@ -775,6 +775,32 @@ export class ClineProvider
 		return cleared
 	}
 
+	public async resumeInterruptedTask(taskId: string, parentTaskId?: string): Promise<void> {
+		const resume = async () => {
+			if (parentTaskId) {
+				await this.taskHistoryStore.invalidate(parentTaskId)
+				const parent = this.taskHistoryStore.get(parentTaskId)
+				if (parent?.status !== "delegated" || parent.awaitingChildId !== taskId) {
+					throw new LifecycleTransitionError(
+						`Cannot resume task ${taskId}: parent ${parentTaskId} no longer awaits it`,
+					)
+				}
+			}
+
+			const resumed = await this.taskHistoryStore.resumeInterruptedTask(taskId)
+			this.recentTasksCache = undefined
+			if (this.isViewLaunched) {
+				await this.postMessageToWebview({ type: "taskHistoryItemUpdated", taskHistoryItem: resumed })
+			}
+		}
+
+		if (parentTaskId) {
+			await this.runDelegationTransition(parentTaskId, resume)
+		} else {
+			await resume()
+		}
+	}
+
 	// Pending Edit Operations Management
 
 	/**
