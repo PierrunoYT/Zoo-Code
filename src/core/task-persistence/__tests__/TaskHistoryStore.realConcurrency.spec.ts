@@ -91,6 +91,54 @@ function createAction(actionId: string, message: string) {
 }
 
 describe("TaskHistoryStore real cross-host locking", () => {
+	it("resumes from the authoritative interrupted record even when the caller cache is stale", async () => {
+		const storagePath = await fs.mkdtemp(path.join(os.tmpdir(), "task-history-resume-lock-"))
+		const storeA = new TaskHistoryStore(storagePath)
+		const storeB = new TaskHistoryStore(storagePath)
+
+		try {
+			await storeA.initialize()
+			await storeA.upsert(item("shared-task"))
+			await storeB.initialize()
+			await storeA.upsert({ ...item("shared-task"), status: "interrupted" })
+
+			expect(storeB.get("shared-task")?.status).toBe("active")
+			await expect(storeB.resumeInterruptedTask("shared-task")).resolves.toMatchObject({
+				id: "shared-task",
+				status: "active",
+			})
+			await storeA.invalidate("shared-task")
+			expect(storeA.get("shared-task")?.status).toBe("active")
+		} finally {
+			storeA.dispose()
+			storeB.dispose()
+			await fs.rm(storagePath, { recursive: true, force: true })
+		}
+	})
+
+	it("rejects resume when the authoritative record is no longer interrupted", async () => {
+		const storagePath = await fs.mkdtemp(path.join(os.tmpdir(), "task-history-resume-rejected-"))
+		const storeA = new TaskHistoryStore(storagePath)
+		const storeB = new TaskHistoryStore(storagePath)
+
+		try {
+			await storeA.initialize()
+			await storeA.upsert(item("shared-task"))
+			await storeB.initialize()
+			await storeA.upsert({ ...item("shared-task"), status: "completed" })
+
+			await expect(storeB.resumeInterruptedTask("shared-task")).rejects.toThrow(
+				"Cannot resume task shared-task with status completed",
+			)
+			await storeB.invalidate("shared-task")
+			expect(storeB.get("shared-task")?.status).toBe("completed")
+		} finally {
+			storeA.dispose()
+			storeB.dispose()
+			await fs.rm(storagePath, { recursive: true, force: true })
+		}
+	})
+
 	it("preserves independent stale-cache deltas through the real per-file lock", async () => {
 		const storagePath = await fs.mkdtemp(path.join(os.tmpdir(), "task-history-real-lock-"))
 		const storeA = new TaskHistoryStore(storagePath)
