@@ -558,6 +558,22 @@ describe("TaskHistoryStore", () => {
 			}
 		})
 
+		it.each([
+			["missing required fields", { id: "owner" }],
+			["invalid status", { ...makeHistoryItem({ id: "owner" }), status: "invalid" }],
+			["invalid token count", { ...makeHistoryItem({ id: "owner" }), tokensIn: "100" }],
+		] as const)("rejects a matching-ID record with %s without changing the cache", async (_scenario, record) => {
+			await store.initialize()
+			store.dispose() // Only the explicit strict refresh should observe the invalid file.
+			const owner = makeHistoryItem({ id: "owner", status: "delegated", awaitingChildId: "child" })
+			await store.upsert(owner)
+			const filePath = path.join(tmpDir, "tasks", "owner", GlobalFileNames.historyItem)
+			await fs.writeFile(filePath, JSON.stringify(record))
+
+			await expect(store.refreshStrict("owner")).rejects.toThrow("Invalid task history record")
+			expect(store.get("owner")).toEqual(owner)
+		})
+
 		it("re-reads a valid record from disk", async () => {
 			await store.initialize()
 			const item = makeHistoryItem({ id: "strict-task", tokensIn: 100 })
