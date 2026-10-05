@@ -328,6 +328,9 @@ describe.each([[RepoPerTaskCheckpointService, "RepoPerTaskCheckpointService"]])(
 					await fs.writeFile(gitignore, ".gitignore\nsecrets/\n")
 					await fs.mkdir(path.dirname(secret), { recursive: true })
 					await fs.writeFile(secret, "untracked and ignored")
+					const shadowGit = simpleGit(service.checkpointsDir)
+					expect(await shadowGit.raw(["ls-files", "--", "secrets/key.txt"])).toBe("")
+					expect((await shadowGit.raw(["check-ignore", "secrets/key.txt"])).trim()).toBe("secrets/key.txt")
 					const checkpoint = await service.saveCheckpoint("before write", { allowEmpty: true })
 
 					// An agent overwrites .gitignore, so secrets/ is no longer ignored, and creates a file.
@@ -349,6 +352,9 @@ describe.each([[RepoPerTaskCheckpointService, "RepoPerTaskCheckpointService"]])(
 					await fs.writeFile(gitignore, "secrets/\n")
 					await fs.mkdir(path.dirname(secret), { recursive: true })
 					await fs.writeFile(secret, "untracked and ignored")
+					const shadowGit = simpleGit(service.checkpointsDir)
+					expect(await shadowGit.raw(["ls-files", "--", "secrets/key.txt"])).toBe("")
+					expect((await shadowGit.raw(["check-ignore", "secrets/key.txt"])).trim()).toBe("secrets/key.txt")
 					const checkpoint = await service.saveCheckpoint("with .gitignore")
 					expect(checkpoint?.commit).toBeTruthy()
 
@@ -367,6 +373,15 @@ describe.each([[RepoPerTaskCheckpointService, "RepoPerTaskCheckpointService"]])(
 				})
 
 				it("restores checkpoints saved before ignore records existed with the previous clean", async () => {
+					const gitignore = path.join(service.workspaceDir, ".gitignore")
+					const secret = path.join(service.workspaceDir, "legacy-secret.txt")
+					await fs.writeFile(gitignore, ".gitignore\nlegacy-secret.txt\n")
+					await fs.writeFile(secret, "ignored at save time")
+					const shadowGit = simpleGit(service.checkpointsDir)
+					expect(await shadowGit.raw(["ls-files", "--", "legacy-secret.txt"])).toBe("")
+					expect((await shadowGit.raw(["check-ignore", "legacy-secret.txt"])).trim()).toBe(
+						"legacy-secret.txt",
+					)
 					await fs.writeFile(testFile, "checkpointed")
 					const checkpoint = await service.saveCheckpoint("legacy checkpoint")
 					// Simulate a checkpoint saved by an older version, which wrote no ignore record.
@@ -376,11 +391,79 @@ describe.each([[RepoPerTaskCheckpointService, "RepoPerTaskCheckpointService"]])(
 					})
 					const createdAfter = path.join(service.workspaceDir, "created-after.txt")
 					await fs.writeFile(createdAfter, "new")
+					await fs.writeFile(gitignore, ".gitignore\n")
 
 					await service.restoreCheckpoint(checkpoint!.commit)
 
 					expect(await fs.readFile(testFile, "utf-8")).toBe("checkpointed")
 					expect(await fileExistsAtPath(createdAfter)).toBe(false)
+					// Unlike recorded protection, legacy git clean only consults the current ignore rules.
+					expect(await fileExistsAtPath(secret)).toBe(false)
+				})
+
+				it.each(["write", "rename"] as const)(
+					"preserves the existing ignore record when %s fails",
+					async (failure) => {
+						const gitignore = path.join(service.workspaceDir, ".gitignore")
+						const secret = path.join(service.workspaceDir, "secret.txt")
+						await fs.writeFile(gitignore, ".gitignore\nsecret.txt\nnew-secret.txt\n")
+						await fs.writeFile(secret, "keep me")
+						const checkpoint = await service.saveCheckpoint("protected secret", { allowEmpty: true })
+						const recordDir = path.join(service.checkpointsDir, ".git", "zoo-checkpoint-ignored")
+						const recordPath = path.join(recordDir, checkpoint!.commit)
+						const previous = await fs.readFile(recordPath, "utf8")
+						const previousFiles = await fs.readdir(recordDir)
+						await fs.writeFile(path.join(service.workspaceDir, "new-secret.txt"), "new ignored file")
+						const writeFile = fs.writeFile.bind(fs)
+						const failureSpy =
+							failure === "write"
+								? vitest.spyOn(fs, "writeFile").mockImplementationOnce(async (file) => {
+										await writeFile(file, "") // Simulate truncation before a failed write.
+										throw new Error("record write failed")
+									})
+								: vitest.spyOn(fs, "rename").mockRejectedValueOnce(new Error("record rename failed"))
+
+						await expect(service.saveCheckpoint("no tracked changes")).resolves.toBeUndefined()
+						expect(failureSpy).toHaveBeenCalledOnce()
+						failureSpy.mockRestore()
+						expect(await fs.readFile(recordPath, "utf8")).toBe(previous)
+						expect(await fs.readdir(recordDir)).toEqual(previousFiles)
+						await fs.writeFile(gitignore, ".gitignore\n")
+						await service.restoreCheckpoint(checkpoint!.commit)
+						expect(await fs.readFile(secret, "utf8")).toBe("keep me")
+					},
+				)
+
+				it("removes empty untracked directories without deleting protected contents", async () => {
+					const gitignore = path.join(service.workspaceDir, ".gitignore")
+					await fs.writeFile(gitignore, ".gitignore\nmixed/keep.txt\nignored-empty/\n")
+					await fs.mkdir(path.join(service.workspaceDir, "mixed"))
+					await fs.writeFile(path.join(service.workspaceDir, "mixed", "keep.txt"), "protected")
+					// Keep Git from collapsing the whole mixed directory into an ignored entry.
+					await fs.writeFile(path.join(service.workspaceDir, "mixed", "tracked.txt"), "tracked")
+					await fs.mkdir(path.join(service.workspaceDir, "ignored-empty"))
+					await fs.mkdir(path.join(service.workspaceDir, "tracked"))
+					await fs.writeFile(path.join(service.workspaceDir, "tracked", "keep.txt"), "tracked")
+					const checkpoint = await service.saveCheckpoint("with protected paths")
+					await fs.writeFile(gitignore, ".gitignore\ncurrent-empty/\n")
+					for (const dir of ["empty/deep", "mixed/empty", "tracked/empty", "current-empty"]) {
+						await fs.mkdir(path.join(service.workspaceDir, dir), { recursive: true })
+					}
+
+					await service.restoreCheckpoint(checkpoint!.commit)
+
+					for (const dir of ["empty", "mixed/empty", "tracked/empty"]) {
+						expect(await fileExistsAtPath(path.join(service.workspaceDir, dir)), dir).toBe(false)
+					}
+					for (const dir of ["ignored-empty", "current-empty"]) {
+						expect(await fileExistsAtPath(path.join(service.workspaceDir, dir)), dir).toBe(true)
+					}
+					expect(await fs.readFile(path.join(service.workspaceDir, "mixed", "keep.txt"), "utf8")).toBe(
+						"protected",
+					)
+					expect(await fs.readFile(path.join(service.workspaceDir, "tracked", "keep.txt"), "utf8")).toBe(
+						"tracked",
+					)
 				})
 			})
 
