@@ -261,7 +261,7 @@ suite("Roo Code Subtasks", function () {
 		}
 	})
 
-	test("interrupted child replays pending new_task once with subtask auto-approval", async () => {
+	test("interrupted child settles pending new_task before resume despite subtask auto-approval", async () => {
 		const api = globalThis.api
 		const asks: Record<string, ClineMessage[]> = {}
 		const delegations: Array<[string, string]> = []
@@ -300,18 +300,16 @@ suite("Roo Code Subtasks", function () {
 
 			await api.setConfiguration({ autoApprovalEnabled: true, alwaysAllowSubtasks: true })
 			await api.resumeTask(childId)
-			await waitFor(() => delegations.length === 2)
-			assert.ok(delegations[1])
-			const [delegatingId, grandchildId] = delegations[1]
-			assert.strictEqual(delegatingId, childId)
-			await waitFor(() => asks[grandchildId]?.some(({ ask }) => ask === "followup") ?? false)
+			// A generic resume ask is emitted only after authoritative pending-action settlement.
+			// Waiting for it verifies the recovery path finished without creating another child.
+			await waitFor(() => asks[childId]?.some(({ ask }) => ask === "resume_task") ?? false)
 			const resumed = await api.getTaskHistoryItem(childId)
-			assert.strictEqual(resumed?.status, "delegated")
+			assert.strictEqual(resumed?.status, "interrupted")
 			assert.strictEqual(resumed?.pendingAction, undefined)
 			assert.strictEqual(resumed?.parentTaskId, rootId)
-			assert.deepStrictEqual(resumed?.childIds, [grandchildId])
-			assert.strictEqual(api.getCurrentTaskStack().at(-1), grandchildId)
-			assert.strictEqual(delegations.length, 2)
+			assert.deepStrictEqual(resumed?.childIds ?? [], [])
+			assert.strictEqual(api.getCurrentTaskStack().at(-1), childId)
+			assert.strictEqual(delegations.length, 1)
 		} finally {
 			api.off(RooCodeEventName.Message, onMessage)
 			api.off(RooCodeEventName.TaskDelegated, onDelegated)
