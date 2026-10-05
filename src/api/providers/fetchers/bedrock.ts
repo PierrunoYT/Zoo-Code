@@ -7,7 +7,10 @@ import type { BedrockCatalogEntry, ProviderSettings } from "@roo-code/types"
 import { getSystemProxyUrl } from "../../../utils/networkProxy"
 
 /** Query the regional control plane, not a custom inference/runtime endpoint. */
-export async function getBedrockCatalog(options: ProviderSettings): Promise<BedrockCatalogEntry[]> {
+export async function getBedrockCatalog(
+	options: ProviderSettings,
+	abortSignal?: AbortSignal,
+): Promise<BedrockCatalogEntry[]> {
 	if (!options.awsRegion) throw new Error("Select an AWS region before refreshing the catalogue.")
 	if (options.awsUseApiKey)
 		throw new Error("Catalogue discovery requires AWS IAM credentials or an AWS profile, not a Bedrock API key.")
@@ -32,8 +35,10 @@ export async function getBedrockCatalog(options: ProviderSettings): Promise<Bedr
 			...(proxy ? { httpAgent: new HttpProxyAgent(proxy), httpsAgent: new HttpsProxyAgent(proxy) } : {}),
 		}),
 	})
-	const signal = AbortSignal.timeout(30_000)
+	const timeout = AbortSignal.timeout(30_000)
+	const signal = abortSignal ? AbortSignal.any([abortSignal, timeout]) : timeout
 	try {
+		signal.throwIfAborted()
 		const result: BedrockCatalogEntry[] = []
 		const foundations = await client.send(
 			new ListFoundationModelsCommand({ byOutputModality: "TEXT", byInferenceType: "ON_DEMAND" }),

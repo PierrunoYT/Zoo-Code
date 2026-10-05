@@ -494,6 +494,7 @@ export interface WebviewMessage {
 		| typeof RouterModelsMessageType.requestRouterModels
 		| typeof OpenAiModelsMessageType.requestOpenAiModels
 		| typeof BedrockModelsMessageType.requestBedrockModels
+		| typeof BedrockModelsMessageType.cancelBedrockModels
 		| typeof OllamaModelsMessageType.requestOllamaModels
 		| typeof LmStudioModelsMessageType.requestLmStudioModels
 		| "requestRooModels"

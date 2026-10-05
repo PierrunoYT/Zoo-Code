@@ -6,6 +6,7 @@ export type BedrockModelId = keyof typeof bedrockModels
 
 export const BedrockModelsMessageType = {
 	requestBedrockModels: "requestBedrockModels",
+	cancelBedrockModels: "cancelBedrockModels",
 	bedrockModels: "bedrockModels",
 } as const
 

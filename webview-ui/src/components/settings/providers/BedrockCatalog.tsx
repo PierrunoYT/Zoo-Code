@@ -43,6 +43,12 @@ export function BedrockCatalog({
 		}
 		window.addEventListener("message", listener)
 		return () => {
+			if (requestId.current) {
+				vscode.postMessage({
+					type: BedrockModelsMessageType.cancelBedrockModels,
+					requestId: requestId.current,
+				})
+			}
 			requestId.current = undefined
 			window.removeEventListener("message", listener)
 		}

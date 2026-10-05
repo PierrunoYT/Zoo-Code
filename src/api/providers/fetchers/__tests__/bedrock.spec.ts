@@ -172,3 +172,47 @@ it("releases the client if a later profile page fails instead of returning parti
 	await expect(getBedrockCatalog({ awsRegion: "eu-west-3" })).rejects.toThrow("Pagination denied")
 	expect(destroy).toHaveBeenCalledOnce()
 })
+
+it.each([
+	["foundations", "external"],
+	["profiles", "external"],
+	["foundations", "timeout"],
+	["profiles", "timeout"],
+])("aborts pending %s discovery on %s cancellation and releases the client", async (operation, cancellation) => {
+	const external = new AbortController()
+	const timeout = new AbortController()
+	const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(timeout.signal)
+	const pending = vi.fn(
+		(signal: AbortSignal) =>
+			new Promise<never>((_resolve, reject) => {
+				signal.addEventListener("abort", () => reject(signal.reason), { once: true })
+			}),
+	)
+	send.mockImplementation((_command: unknown, { abortSignal }: { abortSignal: AbortSignal }) =>
+		operation === "foundations" ? pending(abortSignal) : Promise.resolve({}),
+	)
+	pages.mockImplementation(async function* (_config, _input, { abortSignal }: { abortSignal: AbortSignal }) {
+		yield {}
+		await pending(abortSignal)
+	})
+	try {
+		const request = getBedrockCatalog({ awsRegion: "eu-west-3" }, external.signal)
+		const rejected = expect(request).rejects.toThrow("cancelled discovery")
+		await vi.waitFor(() => expect(pending).toHaveBeenCalledOnce())
+		const signal = pending.mock.calls[0][0]
+		expect(signal.aborted).toBe(false)
+		expect(destroy).not.toHaveBeenCalled()
+		;(cancellation === "external" ? external : timeout).abort(new Error("cancelled discovery"))
+		expect(signal.aborted).toBe(true)
+		await rejected
+		expect(timeoutSpy).toHaveBeenCalledWith(30_000)
+		expect(destroy).toHaveBeenCalledOnce()
+		if (operation === "profiles") {
+			expect(send.mock.calls[0][1].abortSignal).toBe(signal)
+		} else {
+			expect(pages).not.toHaveBeenCalled()
+		}
+	} finally {
+		timeoutSpy.mockRestore()
+	}
+})
