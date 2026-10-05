@@ -92,11 +92,15 @@ export function recoverDelegationParent(
 	return { ...parent, status, awaitingChildId: undefined, delegatedToId: undefined }
 }
 
-/** True when a delegated task has no live owner and its awaited chain ends dead. */
+/**
+ * True when a delegated task has no live owner and its awaited chain ends dead.
+ * Startup preserves interrupted descendants so they can still resume and return results.
+ */
 export function isDeadDelegationChain(
 	child: HistoryItem,
 	getTask: (taskId: string) => HistoryItem | undefined,
 	isTaskLive: (taskId: string) => boolean = () => false,
+	options: { preserveInterrupted?: boolean } = {},
 ): boolean {
 	if (child.status !== "delegated") return false
 
@@ -105,7 +109,8 @@ export function isDeadDelegationChain(
 	while (true) {
 		if (visited.has(current.id) || isTaskLive(current.id)) return false
 		visited.add(current.id)
-		if (current.status === "interrupted" || current.status === "completed") return true
+		if (current.status === "interrupted") return !options.preserveInterrupted
+		if (current.status === "completed") return true
 		if (current.status !== "delegated") return false
 		if (!current.awaitingChildId) return true
 		const awaitedId: string = current.awaitingChildId

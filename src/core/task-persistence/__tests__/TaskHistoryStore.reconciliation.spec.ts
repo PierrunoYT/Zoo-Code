@@ -8,7 +8,7 @@ import type { HistoryItem } from "@roo-code/types"
 
 import { GlobalFileNames } from "../../../shared/globalFileNames"
 import { TaskHistoryStore, assertValidTransition } from "../TaskHistoryStore"
-import { delegateTaskToChild } from "../taskLifecycle"
+import { completeDelegatedChild, delegateTaskToChild } from "../taskLifecycle"
 
 vi.mock("../../../utils/storage", () => ({
 	getStorageBasePath: vi.fn().mockImplementation((defaultPath: string) => defaultPath),
@@ -679,7 +679,7 @@ describe("TaskHistoryStore reconcileDelegationState", () => {
 		})
 	})
 
-	it("recovers a delegated chain that terminates in an interrupted grandchild", async () => {
+	it("preserves an interrupted grandchild's route back to its parent after restart", async () => {
 		const parent = makeItem({
 			id: "nested-parent",
 			status: "delegated",
@@ -703,12 +703,29 @@ describe("TaskHistoryStore reconcileDelegationState", () => {
 		await store.initialize()
 
 		expect(store.get(parent.id)).toMatchObject({ status: "delegated", awaitingChildId: child.id })
+		expect(store.get(child.id)).toEqual(child)
+		expect(store.get(grandchild.id)?.status).toBe("interrupted")
+		expect(
+			JSON.parse(await fs.readFile(path.join(tmpDir, "tasks", child.id, "history_item.json"), "utf8")),
+		).toEqual(child)
+
+		// Completing the resumed grandchild must still reopen its immediate parent.
+		await store.atomicUpdatePair(
+			grandchild.id,
+			child.id,
+			(current) => completeDelegatedChild(store.get(child.id)!, current, "resumed result").child,
+			(current) => completeDelegatedChild(current, store.get(grandchild.id)!, "resumed result").parent,
+		)
+		expect(store.get(grandchild.id)?.status).toBe("completed")
 		expect(store.get(child.id)).toMatchObject({
-			status: "interrupted",
+			status: "active",
+			parentTaskId: parent.id,
+			completedByChildId: grandchild.id,
+			completionResultSummary: "resumed result",
 			awaitingChildId: undefined,
 			delegatedToId: undefined,
 		})
-		expect(store.get(grandchild.id)?.status).toBe("interrupted")
+		expect(store.get(parent.id)).toMatchObject({ status: "delegated", awaitingChildId: child.id })
 	})
 
 	it.each([undefined, "child", "parent"])(

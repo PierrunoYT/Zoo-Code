@@ -126,6 +126,23 @@ describe("task lifecycle transitions", () => {
 		).toBe(false)
 	})
 
+	it.each([
+		["interrupted", false],
+		["completed", true],
+		["active", false],
+		["delegated", true],
+		[undefined, true],
+	] as const)("applies the startup recovery policy to a nested %s leaf", (status, recoverAtStartup) => {
+		const child = item("child", { status: "delegated", awaitingChildId: "middle" })
+		const middle = item("middle", { status: "delegated", awaitingChildId: "leaf" })
+		const leaf = status ? item("leaf", { status }) : undefined
+		const getTask = (id: string) => (id === middle.id ? middle : leaf)
+
+		expect(isDeadDelegationChain(child, getTask, () => false, { preserveInterrupted: true })).toBe(recoverAtStartup)
+		// Explicit runtime re-delegation may still retire the interrupted descendant chain.
+		expect(isDeadDelegationChain(child, getTask)).toBe(status !== "active")
+	})
+
 	it("recovers a dead delegated child without releasing its parent's ownership", () => {
 		const parent = item("parent", { status: "delegated", awaitingChildId: "child", delegatedToId: "child" })
 		const child = item("child", {

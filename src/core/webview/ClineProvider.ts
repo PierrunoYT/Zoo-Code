@@ -3804,12 +3804,7 @@ export class ClineProvider
 	}
 
 	private isTaskRunningInAnyProvider(taskId: string): boolean {
-		return (
-			this.taskRegistry.hasRunning(taskId) ||
-			Array.from(ClineProvider.activeInstances).some(
-				(provider) => provider !== this && provider.taskRegistry.hasRunning(taskId),
-			)
-		)
+		return this.taskRegistry.hasRunning(taskId) || ClineProvider.isTaskRunningInAnyActiveProvider(taskId)
 	}
 
 	private async refreshDelegationChain(taskId: string): Promise<void> {
@@ -3904,12 +3899,33 @@ export class ClineProvider
 		// waited on the shared lock. Refresh before mutating either task stack.
 		await this.taskHistoryStore.invalidate(parentTaskId)
 		const authoritativeParent = this.taskHistoryStore.get(parentTaskId)
+		const assertDelegationPreconditions = () => {
+			if (this._disposed) {
+				throw new Error("[delegateParentAndOpenChild] Provider was disposed during delegation")
+			}
+			if (parent.abort || parent.abandoned) {
+				throw new Error(`[delegateParentAndOpenChild] Parent ${parent.taskId} was cancelled during delegation`)
+			}
+			if (this.getCurrentTask() !== parent) {
+				throw new Error(`[delegateParentAndOpenChild] Parent ${parent.taskId} is no longer current`)
+			}
+			if (pendingActionId) {
+				const parentHistory = this.taskHistoryStore.get(parentTaskId)
+				if (parentHistory?.pendingAction?.actionId !== pendingActionId) {
+					throw new Error(
+						`[delegateParentAndOpenChild] Pending action mismatch for parent ${parentTaskId}: expected ${pendingActionId}, found ${parentHistory?.pendingAction?.actionId}`,
+					)
+				}
+			}
+		}
 		if (authoritativeParent?.status === "delegated") {
 			const awaitedChildId = authoritativeParent.awaitingChildId
 			if (!awaitedChildId) throw new Error("Cannot re-delegate a parent with no awaited child")
 			await this.taskHistoryStore.invalidate(awaitedChildId)
 			let awaitedChild = this.taskHistoryStore.get(awaitedChildId)
 			if (awaitedChild?.status === "delegated") {
+				// Reject invalid requests before recovery detaches the old child's descendants.
+				assertDelegationPreconditions()
 				awaitedChild = await this.recoverDeadAwaitedChild(authoritativeParent, awaitedChildId)
 			}
 			if (awaitedChild?.status !== "interrupted") {
@@ -3918,23 +3934,8 @@ export class ClineProvider
 				)
 			}
 		}
-		if (this._disposed) {
-			throw new Error("[delegateParentAndOpenChild] Provider was disposed during delegation")
-		}
-		if (parent.abort || parent.abandoned) {
-			throw new Error(`[delegateParentAndOpenChild] Parent ${parent.taskId} was cancelled during delegation`)
-		}
-		if (this.getCurrentTask() !== parent) {
-			throw new Error(`[delegateParentAndOpenChild] Parent ${parent.taskId} is no longer current`)
-		}
-		if (pendingActionId) {
-			const parentHistory = this.taskHistoryStore.get(parentTaskId)
-			if (parentHistory?.pendingAction?.actionId !== pendingActionId) {
-				throw new Error(
-					`[delegateParentAndOpenChild] Pending action mismatch for parent ${parentTaskId}: expected ${pendingActionId}, found ${parentHistory?.pendingAction?.actionId}`,
-				)
-			}
-		}
+		// Recovery awaits persistence; cancellation or replacement may have happened meanwhile.
+		assertDelegationPreconditions()
 
 		const parentExecutionContext: DelegatedChildContext = {
 			mode,

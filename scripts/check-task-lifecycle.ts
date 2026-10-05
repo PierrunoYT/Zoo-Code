@@ -70,6 +70,16 @@ const semanticLandmarks = {
 		state["child-b"]?.status === "interrupted",
 } satisfies Record<string, (state: ModelState) => boolean>
 const semanticWitnesses = {
+	"interrupted-grandchild-completes-after-owner-loss": ({ prev, next, transition }: WitnessContext) =>
+		transition.completion?.childId === "child-b" &&
+		prev.liveTaskIds.length === 0 &&
+		prev.parent?.awaitingChildId === "child-a" &&
+		prev["child-a"]?.status === "delegated" &&
+		prev["child-a"].awaitingChildId === "child-b" &&
+		prev["child-b"]?.status === "interrupted" &&
+		next["child-a"]?.status === "active" &&
+		next["child-a"].completedByChildId === "child-b" &&
+		next.parent?.awaitingChildId === "child-a",
 	"interrupted-pending-delegation-settled": ({ prev, next, transition }: WitnessContext) =>
 		transition.settlement !== undefined &&
 		prev[transition.settlement.taskId]?.status === "interrupted" &&
@@ -329,6 +339,17 @@ function invariantViolations(state: ModelState): string[] {
 			}
 			if (!current.childIds?.includes(current.awaitingChildId)) {
 				violations.push(`${id}: awaited child must be retained in childIds`)
+			}
+			if (
+				child?.status === "interrupted" &&
+				isDeadDelegationChain(
+					current,
+					(taskId) => state[taskId as TaskId],
+					(taskId) => state.liveTaskIds.includes(taskId as TaskId),
+					{ preserveInterrupted: true },
+				)
+			) {
+				violations.push(`${id}: startup recovery must preserve the interrupted child's completion route`)
 			}
 		} else if (current.awaitingChildId || current.delegatedToId) {
 			violations.push(`${id}: only delegated tasks may retain an awaited-child pointer`)

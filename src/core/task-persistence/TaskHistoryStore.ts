@@ -442,8 +442,9 @@ export class TaskHistoryStore {
 	 *   parent → `interrupted` if its ancestor still awaits it, otherwise → `active`
 	 * - Parent `delegated`, dead nested delegated chain → child → `interrupted`
 	 *
-	 * A parent awaiting an `interrupted` child retains its delegation link. Runtime
-	 * ownership prevents recovery even when the persisted chain appears dead.
+	 * Chains ending in an `interrupted` task retain every delegation link so that
+	 * resuming that task can return its result to its parent. Runtime ownership
+	 * prevents recovery even when the persisted chain appears dead.
 	 */
 	private async reconcileDelegationState(persistedActiveIds: ReadonlySet<string>): Promise<void> {
 		return this.withLock(() => this.reconcileDelegationStateCore(persistedActiveIds))
@@ -507,7 +508,9 @@ export class TaskHistoryStore {
 						repairsInThisPass++
 					} else if (
 						child.status === "delegated" &&
-						isDeadDelegationChain(child, (id) => byId.get(id), this.isTaskOwned)
+						isDeadDelegationChain(child, (id) => byId.get(id), this.isTaskOwned, {
+							preserveInterrupted: true,
+						})
 					) {
 						const recoveredChild = recoverDeadDelegatedChild(item, child)
 						await this.upsertCore(recoveredChild)
