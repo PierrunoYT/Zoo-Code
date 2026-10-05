@@ -132,7 +132,7 @@ import {
 	interruptDelegatedChild,
 	LifecycleTransitionError,
 } from "../task-persistence"
-import { readTaskMessages } from "../task-persistence/taskMessages"
+import { readTaskMessages, updateTaskMessages } from "../task-persistence/taskMessages"
 import { getNonce } from "./getNonce"
 import { getUri } from "./getUri"
 import { omitOriginalContentFromExtensionMessage } from "./stripOriginalContent"
@@ -2481,10 +2481,7 @@ export class ClineProvider
 	): Promise<void> {
 		const taskId = originalHistoryItem.id
 		const globalStoragePath = this.contextProxy.globalStorageUri.fsPath
-		const messages = await readTaskMessages({ taskId, globalStoragePath })
-		const messagesWithoutCheckpoints = messages.filter(
-			(message) => !(message.type === "say" && message.say === "checkpoint_saved"),
-		)
+		let removedCheckpoints: ClineMessage[] = []
 		const taskDir = await getTaskDirectoryPath(globalStoragePath, taskId)
 		const checkpointsDir = path.join(taskDir, "checkpoints")
 		const checkpointBackupDir = path.join(taskDir, `checkpoints.workspace-change-${crypto.randomUUID()}`)
@@ -2500,14 +2497,22 @@ export class ClineProvider
 		}
 
 		try {
-			if (messagesWithoutCheckpoints.length !== messages.length) {
-				await saveTaskMessages({ messages: messagesWithoutCheckpoints, taskId, globalStoragePath })
-			}
+			await updateTaskMessages({
+				taskId,
+				globalStoragePath,
+				update: (messages) => {
+					removedCheckpoints = messages.filter(
+						(message) => message.type === "say" && message.say === "checkpoint_saved",
+					)
+					return messages.filter((message) => !removedCheckpoints.includes(message))
+				},
+			})
 			await this.updateTaskHistory(updatedHistoryItem)
 		} catch (error) {
-			if (messagesWithoutCheckpoints.length !== messages.length) {
+			if (removedCheckpoints.length > 0) {
 				try {
-					await saveTaskMessages({ messages, taskId, globalStoragePath })
+					// Restore only the removed rows; never replace intervening message writes.
+					await saveTaskMessages({ messages: removedCheckpoints, taskId, globalStoragePath, merge: true })
 				} catch (rollbackError) {
 					this.log(
 						`[resetTaskCheckpointsForWorkspaceChange] Failed to restore messages for ${taskId}: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`,
@@ -2536,12 +2541,16 @@ export class ClineProvider
 		}
 
 		if (checkpointDirectoryStaged) {
-			try {
-				await fs.rm(checkpointBackupDir, { recursive: true, force: true })
-			} catch (error) {
-				this.log(
-					`[resetTaskCheckpointsForWorkspaceChange] Failed to remove checkpoint backup for ${taskId}: ${error instanceof Error ? error.message : String(error)}`,
-				)
+			for (let attempt = 0; attempt < 3; attempt++) {
+				try {
+					await fs.rm(checkpointBackupDir, { recursive: true, force: true })
+					break
+				} catch (error) {
+					this.log(
+						`[resetTaskCheckpointsForWorkspaceChange] Failed to remove checkpoint backup ${checkpointBackupDir}: ${error instanceof Error ? error.message : String(error)}`,
+					)
+					if (attempt < 2) await delay(100)
+				}
 			}
 		}
 	}
