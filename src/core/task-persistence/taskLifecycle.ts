@@ -29,9 +29,12 @@ export function assertValidTransition(from: HistoryItemStatus | undefined, to: H
  * outside VALID_TASK_STATUS_TRANSITIONS so generic stale writes cannot revive
  * an interrupted task.
  */
-export function resumeInterruptedTask(task: HistoryItem): HistoryItem {
+export function resumeInterruptedTask(task: HistoryItem, expectedParentTaskId?: string): HistoryItem {
 	if (task.status !== "interrupted") {
 		throw new LifecycleTransitionError(`Cannot resume task ${task.id} with status ${task.status ?? "active"}`)
+	}
+	if (task.parentTaskId !== expectedParentTaskId) {
+		throw new LifecycleTransitionError(`Cannot resume task ${task.id}: parent linkage changed`)
 	}
 	return { ...task, status: "active" }
 }

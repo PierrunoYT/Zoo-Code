@@ -66,7 +66,7 @@ describe("task lifecycle transitions", () => {
 		expect(() => delegateTaskToChild(interruptedChild, "grandchild")).toThrow(
 			"Invalid task status transition: interrupted → delegated",
 		)
-		expect(delegateTaskToChild(resumeInterruptedTask(interruptedChild), "grandchild")).toMatchObject({
+		expect(delegateTaskToChild(resumeInterruptedTask(interruptedChild, "parent"), "grandchild")).toMatchObject({
 			status: "delegated",
 			parentTaskId: "parent",
 			awaitingChildId: "grandchild",

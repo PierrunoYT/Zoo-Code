@@ -59,6 +59,8 @@ Each task slot can also hold one of two pending `create_subtask` actions. A `sta
 
 Production completion also accepts a recovery-compatible `active` parent that still awaits the returning child, then clears the stale pointers. Normal model transitions never create that intermediate state, so it is covered by a focused reducer test rather than admitted as a generally valid reachable state.
 
+Explicit resume compares the caller's expected parent with the authoritative child backlink under the child-file lock. Abandonment writes child detachment before parent release, so a stale approval is rejected even in that partial-write window. Representative reducer scenarios cover stale linked and standalone approvals; a two-store provider test covers abandonment after the parent precheck. Rehydrated interrupted tasks omit lineage from message metadata saves, preventing their stale construction snapshots from restoring severed links after rejection. This closes abandonment-before-resume, not every cross-host ordering: parent-only redelegation, reverse-order stale abandonment, and other live-task writers remain within the ownership/generation gaps below.
+
 ## Shared-store concurrency model
 
 The same `pnpm lifecycle:model-check` command also runs a second bounded explorer over two `TaskHistoryStore` hosts. It imports the production `computeHistoryDelta` and `mergeHistoryDelta` functions, so its semantics match the store rather than assuming coherent caches or transactional pair writes:

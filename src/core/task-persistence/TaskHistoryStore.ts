@@ -1083,7 +1083,7 @@ export class TaskHistoryStore {
 	 * prompt. Generic writes intentionally reject interrupted → active so stale
 	 * task snapshots cannot revive cancelled work.
 	 */
-	public async resumeInterruptedTask(taskId: string): Promise<HistoryItem> {
+	public async resumeInterruptedTask(taskId: string, expectedParentTaskId?: string): Promise<HistoryItem> {
 		return this.withLock(async () => {
 			const cached = this.cache.get(taskId)
 			if (!cached) {
@@ -1103,7 +1103,10 @@ export class TaskHistoryStore {
 						)
 					}
 
-					authoritative = resumeInterruptedTaskRecord(existing as HistoryItem)
+					// Abandonment commits child detachment before releasing the parent.
+					// Compare the caller's linkage under this same child-file lock.
+					this.cache.set(taskId, existing as HistoryItem)
+					authoritative = resumeInterruptedTaskRecord(existing as HistoryItem, expectedParentTaskId)
 					return authoritative
 				},
 			})

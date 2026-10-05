@@ -20,6 +20,7 @@ import { ContextProxy } from "../../config/ContextProxy"
 import { providerIdentifiers } from "@roo-code/types/provider-identifiers"
 import { attemptCompletionTool, type AttemptCompletionCallbacks } from "../../tools/AttemptCompletionTool"
 import type { AttemptCompletionToolUse } from "../../../shared/tools"
+import { LifecycleTransitionError } from "../../task-persistence/taskLifecycle"
 
 type TaskPersistenceAccess = {
 	addToApiConversationHistory: (message: Anthropic.MessageParam) => Promise<void>
@@ -1163,7 +1164,7 @@ describe("Task persistence", () => {
 				},
 				startTask: false,
 			})
-			vi.spyOn(task, "ask").mockResolvedValue({ response: "noButtonClicked" })
+			vi.spyOn(task, "ask").mockResolvedValue({ response: "yesButtonClicked" })
 
 			mockReadApiMessages.mockResolvedValue([
 				{
@@ -1203,6 +1204,68 @@ describe("Task persistence", () => {
 	// ── resumeTaskFromHistory — interrupted tool calls must be recorded as errors ──
 
 	describe("resumeTaskFromHistory interrupted tool calls", () => {
+		it.each(["noButtonClicked", "unexpected"])(
+			"does not activate or run after resume response %s",
+			async (response) => {
+				const task = new Task({
+					provider: mockProvider,
+					apiConfiguration: mockApiConfig,
+					startTask: false,
+					initialStatus: "interrupted",
+				})
+				const answer: Awaited<ReturnType<Task["ask"]>> = { response: "noButtonClicked" }
+				// Model an unvalidated response arriving across the webview boundary.
+				Reflect.set(answer, "response", response)
+				mockProvider.taskHistoryStore.get = vi.fn().mockReturnValue({ id: task.taskId, status: "interrupted" })
+				vi.spyOn(task, "ask").mockResolvedValue(answer)
+				const loop = vi.spyOn(getTaskPersistenceAccess(task), "initiateTaskLoop").mockResolvedValue(undefined)
+				await task["resumeTaskFromHistory"]()
+				expect(mockProvider.resumeInterruptedTask).not.toHaveBeenCalled()
+				expect(loop).not.toHaveBeenCalled()
+			},
+		)
+
+		it("does not restore stale lineage through repeated message saves after rejected resume", async () => {
+			const history = {
+				id: "detached",
+				number: 1,
+				ts: 1,
+				task: "Detached",
+				tokensIn: 0,
+				tokensOut: 0,
+				totalCost: 0,
+				status: "interrupted" as const,
+				parentTaskId: "parent",
+				rootTaskId: "root",
+			}
+			const task = new Task({
+				provider: mockProvider,
+				apiConfiguration: mockApiConfig,
+				startTask: false,
+				historyItem: history,
+			})
+			mockProvider.taskHistoryStore.get = vi
+				.fn()
+				.mockReturnValue({ ...history, parentTaskId: undefined, rootTaskId: undefined })
+			mockProvider.resumeInterruptedTask = vi
+				.fn()
+				.mockRejectedValue(new LifecycleTransitionError("parent linkage changed"))
+			vi.spyOn(task, "ask").mockResolvedValue({ response: "yesButtonClicked" })
+			const loop = vi.spyOn(getTaskPersistenceAccess(task), "initiateTaskLoop").mockResolvedValue(undefined)
+			await expect(task["resumeTaskFromHistory"]()).rejects.toThrow("parent linkage changed")
+			mockTaskMetadata.mockResolvedValueOnce({ historyItem: { ...history }, tokenUsage: {} })
+			mockTaskMetadata.mockResolvedValueOnce({ historyItem: { ...history }, tokenUsage: {} })
+			await task["saveClineMessages"]()
+			await task["saveClineMessages"]()
+			expect(loop).not.toHaveBeenCalled()
+			expect(mockProvider.updateTaskHistory).toHaveBeenCalled()
+			for (const [saved] of vi.mocked(mockProvider.updateTaskHistory).mock.calls) {
+				expect(saved).not.toHaveProperty("parentTaskId")
+				expect(saved).not.toHaveProperty("rootTaskId")
+				expect(saved.status).toBe("interrupted")
+			}
+		})
+
 		it("resumes a Task.create history task only once when run is also called", async () => {
 			mockReadTaskMessages.mockResolvedValue([])
 			mockReadApiMessages.mockResolvedValue([{ role: "user", content: "Continue" }])
@@ -1269,7 +1332,7 @@ describe("Task persistence", () => {
 			const initiateTaskLoopSpy = vi
 				.spyOn(getTaskPersistenceAccess(task), "initiateTaskLoop")
 				.mockResolvedValue(undefined)
-			vi.spyOn(task, "ask").mockResolvedValue({ response: "noButtonClicked" })
+			vi.spyOn(task, "ask").mockResolvedValue({ response: "yesButtonClicked" })
 
 			// The persisted history ends with an assistant turn whose tool calls
 			// (attempt_completion) were never answered because the task was
@@ -1332,7 +1395,7 @@ describe("Task persistence", () => {
 			const initiateTaskLoopSpy = vi
 				.spyOn(getTaskPersistenceAccess(task), "initiateTaskLoop")
 				.mockResolvedValue(undefined)
-			vi.spyOn(task, "ask").mockResolvedValue({ response: "noButtonClicked" })
+			vi.spyOn(task, "ask").mockResolvedValue({ response: "messageResponse", text: "Continue" })
 
 			// The persisted history ends with a user turn that only answered the
 			// first of two parallel tool calls.
