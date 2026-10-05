@@ -4183,6 +4183,11 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 					let item = await nextChunkWithAbort()
 					while (!item.done) {
 						const chunk = item.value
+						// Detect a loop before prefetching: the provider may stall on its next read.
+						if (chunk?.type === "reasoning" && reasoningLoopDetector.add(chunk.text)) {
+							this.cancelCurrentRequest()
+							throw new RepetitiveReasoningError()
+						}
 						item = await nextChunkWithAbort()
 						if (!chunk) {
 							// Sometimes chunk is undefined, no idea that can cause
@@ -4192,10 +4197,6 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 
 						switch (chunk.type) {
 							case "reasoning": {
-								if (reasoningLoopDetector.add(chunk.text)) {
-									this.cancelCurrentRequest()
-									throw new RepetitiveReasoningError()
-								}
 								reasoningMessage += chunk.text
 								// Only apply formatting if the message contains sentence-ending punctuation followed by **
 								let formattedReasoning = reasoningMessage
@@ -4676,7 +4677,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 							stack.push({
 								userContent: currentUserContent,
 								includeFileDetails: false,
-								retryAttempt: 0,
+								retryAttempt: (currentItem.retryAttempt ?? 0) + 1,
 							})
 							continue
 						} else {
