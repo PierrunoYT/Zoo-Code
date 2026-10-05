@@ -1799,6 +1799,12 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 
 			const provider = this.providerRef.deref()
 			const existingStatus = provider?.taskHistoryStore.get(this.taskId)?.status
+			if (this.initialStatus === "interrupted") {
+				// A rehydrated task's links may have been severed by another host.
+				// Only lifecycle operations own lineage after interruption, not message saves.
+				delete historyItem.parentTaskId
+				delete historyItem.rootTaskId
+			}
 			await provider?.updateTaskHistory(existingStatus ? { ...historyItem, status: existingStatus } : historyItem)
 		} catch (error) {
 			// The message array was persisted above; a metadata or task-history failure must
@@ -3226,7 +3232,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 			this.isInitialized = true
 
 			const { response, text, images } = await this.ask(askType) // Calls `postStateToWebview`.
-			if (this.abort || this.abandoned) {
+			if (this.abort || this.abandoned || (response !== "yesButtonClicked" && response !== "messageResponse")) {
 				return
 			}
 			if (this.initialStatus === "interrupted") {

@@ -91,6 +91,51 @@ function createAction(actionId: string, message: string) {
 }
 
 describe("TaskHistoryStore real cross-host locking", () => {
+	it("rejects resume for a task absent from cache without creating a record", async () => {
+		const storagePath = await fs.mkdtemp(path.join(os.tmpdir(), "resume-cache-miss-"))
+		const store = new TaskHistoryStore(storagePath)
+		try {
+			await store.initialize()
+			await expect(store.resumeInterruptedTask("missing")).rejects.toThrow("task missing not found in cache")
+			expect(store.get("missing")).toBeUndefined()
+			await expect(
+				fs.access(path.join(storagePath, "tasks", "missing", "history_item.json")),
+			).rejects.toMatchObject({ code: "ENOENT" })
+		} finally {
+			store.dispose()
+			await fs.rm(storagePath, { recursive: true, force: true })
+		}
+	})
+
+	it.each(["missing", "malformed", "schema", "identity"])(
+		"rejects %s disk records during resume without overwriting them",
+		async (scenario) => {
+			const storagePath = await fs.mkdtemp(path.join(os.tmpdir(), "resume-invalid-"))
+			const store = new TaskHistoryStore(storagePath)
+			const filePath = path.join(storagePath, "tasks", "child", "history_item.json")
+			try {
+				await store.initialize()
+				await store.upsert({ ...item("child"), status: "interrupted" })
+				const contents =
+					scenario === "malformed"
+						? "{broken"
+						: JSON.stringify(scenario === "schema" ? { id: "child" } : item("other"))
+				if (scenario === "missing") await fs.unlink(filePath)
+				else await fs.writeFile(filePath, contents)
+				await expect(store.resumeInterruptedTask("child")).rejects.toThrow(
+					"task child has no valid disk record",
+				)
+				expect(store.get("child")).toBeUndefined()
+				expect(store["taskFileMtimes"].has("child")).toBe(false)
+				if (scenario === "missing") await expect(fs.access(filePath)).rejects.toMatchObject({ code: "ENOENT" })
+				else expect(await fs.readFile(filePath, "utf8")).toBe(contents)
+			} finally {
+				store.dispose()
+				await fs.rm(storagePath, { recursive: true, force: true })
+			}
+		},
+	)
+
 	it("resumes from the authoritative interrupted record even when the caller cache is stale", async () => {
 		const storagePath = await fs.mkdtemp(path.join(os.tmpdir(), "task-history-resume-lock-"))
 		const storeA = new TaskHistoryStore(storagePath)

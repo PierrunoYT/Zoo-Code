@@ -195,7 +195,7 @@ function transitions(state: ModelState): Transition[] {
 		if (resumeValid) {
 			result.push({
 				name: `resume(${parentId})`,
-				next: replace(state, { ...resumeInterruptedTask(parent), modelWasResumed: true }),
+				next: replace(state, { ...resumeInterruptedTask(parent, parent.parentTaskId), modelWasResumed: true }),
 			})
 		}
 	}
@@ -438,7 +438,7 @@ function runRepresentativeScenarios(): void {
 	assert.throws(() => delegateTaskToChild(delegated, "child-b", "active"), /not interrupted/)
 
 	const interruptedA = interruptDelegatedChild(delegated, childA)
-	const resumedA = resumeInterruptedTask(interruptedA)
+	const resumedA = resumeInterruptedTask(interruptedA, parent.id)
 	const resumedNested = delegateTaskToChild(resumedA, "child-b")
 	assert.equal(resumedNested.status, "delegated")
 	assert.equal(resumedNested.awaitingChildId, "child-b")
@@ -447,6 +447,10 @@ function runRepresentativeScenarios(): void {
 
 	const abandoned = abandonDelegatedChild(delegated, interruptedA)
 	assert.throws(() => completeDelegatedChild(abandoned.parent, abandoned.child, "late"), /not delegated to child/)
+	// A resume approved against the old linkage cannot revive an abandoned child.
+	assert.throws(() => resumeInterruptedTask(abandoned.child, parent.id), /parent linkage changed/)
+	assert.throws(() => resumeInterruptedTask(interruptedA), /parent linkage changed/)
+	assert.equal(resumeInterruptedTask(abandoned.child).status, "active")
 
 	const childB = task("child-b", "child-a")
 	const nestedParent = delegateTaskToChild(childA, childB.id)

@@ -609,7 +609,7 @@ export class ClineProvider
 	}
 
 	private async cleanupFailedHistoryTask(task: Task, error: unknown): Promise<void> {
-		if (!(error instanceof PendingActionSettlementError)) {
+		if (!(error instanceof PendingActionSettlementError || error instanceof LifecycleTransitionError)) {
 			return
 		}
 
@@ -777,7 +777,7 @@ export class ClineProvider
 				}
 			}
 
-			const resumed = await this.taskHistoryStore.resumeInterruptedTask(taskId)
+			const resumed = await this.taskHistoryStore.resumeInterruptedTask(taskId, parentTaskId)
 			this.recentTasksCache = undefined
 			if (this.isViewLaunched) {
 				await this.postMessageToWebview({ type: "taskHistoryItemUpdated", taskHistoryItem: resumed })
