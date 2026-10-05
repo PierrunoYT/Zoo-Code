@@ -16,6 +16,9 @@ import { t } from "../../i18n"
 import { CheckpointDiff, CheckpointResult, CheckpointEventMap } from "./types"
 import { getExcludePatterns } from "./excludes"
 
+// Stored in the commit itself so an interrupted sidecar write cannot look like a legacy checkpoint.
+const IGNORED_RECORD_HEADER = "Zoo-Checkpoint-Ignored: v1"
+
 /**
  * Environment variables stripped before passing the env to simple-git.
  *
@@ -216,7 +219,7 @@ export abstract class ShadowCheckpointService extends EventEmitter {
 			await git.addConfig("user.email", "noreply@example.com")
 			await this.writeExcludeFile()
 			await this.stageAll(git)
-			const { commit } = await git.commit("initial commit", { "--allow-empty": null })
+			const { commit } = await git.commit(`initial commit\n\n${IGNORED_RECORD_HEADER}`, { "--allow-empty": null })
 			this.baseHash = commit
 			await this.recordIgnoredPaths(git, commit)
 			created = true
@@ -277,32 +280,43 @@ export abstract class ShadowCheckpointService extends EventEmitter {
 		return output.split("\0").filter(Boolean)
 	}
 
-	private async readIgnoredRecord(commitHash: string): Promise<string[] | undefined> {
+	private async readIgnoredRecord(commitHash: string, required = false): Promise<string[] | undefined> {
+		let content: string
 		try {
-			const content = await fs.readFile(this.ignoredRecordPath(commitHash), "utf8")
-			return content.split("\0").filter(Boolean)
-		} catch {
-			return undefined
+			content = await fs.readFile(this.ignoredRecordPath(commitHash), "utf8")
+		} catch (error) {
+			if (error instanceof Error && "code" in error && error.code === "ENOENT" && !required) return undefined
+			throw error
 		}
+		const prefix = `${IGNORED_RECORD_HEADER}\n`
+		if (content.startsWith(prefix)) {
+			const paths: unknown = JSON.parse(content.slice(prefix.length))
+			if (
+				!Array.isArray(paths) ||
+				!paths.every((entry): entry is string => typeof entry === "string" && !!entry)
+			) {
+				throw new Error(`Invalid ignored-path record for checkpoint ${commitHash}`)
+			}
+			return paths
+		}
+		if (required) throw new Error(`Invalid ignored-path record for checkpoint ${commitHash}`)
+		// Records from the first implementation were NUL-delimited, without a commit marker.
+		return content.split("\0").filter(Boolean)
 	}
 
-	/** Adds the currently ignored paths to the record for a checkpoint; never fails the save. */
-	private async recordIgnoredPaths(git: SimpleGit, commitHash: string) {
+	/** Publish protection before reporting success; preserve the previous record on failure. */
+	private async recordIgnoredPaths(git: SimpleGit, commitHash: string, requireExisting = false) {
 		const recordPath = this.ignoredRecordPath(commitHash)
 		const tempPath = `${recordPath}.${crypto.randomUUID()}.tmp`
 		try {
 			const ignored = new Set([
-				...((await this.readIgnoredRecord(commitHash)) ?? []),
+				...((await this.readIgnoredRecord(commitHash, requireExisting)) ?? []),
 				...(await this.listIgnoredPaths(git)),
 			])
 			await fs.mkdir(path.dirname(recordPath), { recursive: true })
 			// A no-change save reuses the same commit. Never truncate its existing protection.
-			await fs.writeFile(tempPath, [...ignored].join("\0"))
+			await fs.writeFile(tempPath, `${IGNORED_RECORD_HEADER}\n${JSON.stringify([...ignored])}`, { flush: true })
 			await fs.rename(tempPath, recordPath)
-		} catch (error) {
-			this.log(
-				`[${this.constructor.name}#recordIgnoredPaths] failed to record ignored paths: ${error instanceof Error ? error.message : String(error)}`,
-			)
 		} finally {
 			await fs.rm(tempPath, { force: true }).catch(() => {})
 		}
@@ -427,11 +441,15 @@ export abstract class ShadowCheckpointService extends EventEmitter {
 			const startTime = Date.now()
 			await this.stageAll(this.git)
 			const commitArgs = options?.allowEmpty ? { "--allow-empty": null } : undefined
-			const result = await this.git.commit(message, commitArgs)
+			const result = await this.git.commit(`${message}\n\n${IGNORED_RECORD_HEADER}`, commitArgs)
 			const fromHash = this._checkpoints[this._checkpoints.length - 1] ?? this.baseHash!
-			const toHash = result.commit || fromHash
+			const toHash = result.commit || (await this.git.revparse(["HEAD"]))
+			// A no-op save cannot reconstruct missing checkpoint-time protection from today's ignore rules.
+			const requireExisting =
+				!result.commit &&
+				(await this.git.show(["-s", "--format=%B", toHash])).split(/\r?\n/).includes(IGNORED_RECORD_HEADER)
+			await this.recordIgnoredPaths(this.git, toHash, requireExisting)
 			this._checkpoints.push(toHash)
-			await this.recordIgnoredPaths(this.git, toHash)
 			const duration = Date.now() - startTime
 
 			if (result.commit) {
@@ -465,12 +483,21 @@ export abstract class ShadowCheckpointService extends EventEmitter {
 		try {
 			this.log(`[${this.constructor.name}#restoreCheckpoint] starting checkpoint restore`)
 
+			// Never use webview input as a path or Git revision expression.
+			if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(commitHash)) {
+				throw new Error("Invalid checkpoint commit hash")
+			}
 			if (!this.git) {
 				throw new Error("Shadow git repo not initialized")
 			}
 
 			const start = Date.now()
-			const ignoredAtCheckpoint = await this.readIgnoredRecord(commitHash)
+			if ((await this.git.raw(["cat-file", "-t", commitHash])).trim() !== "commit") {
+				throw new Error("Checkpoint hash does not identify a commit")
+			}
+			const commitMessage = await this.git.show(["-s", "--format=%B", commitHash])
+			const recordRequired = commitMessage.split(/\r?\n/).includes(IGNORED_RECORD_HEADER)
+			const ignoredAtCheckpoint = await this.readIgnoredRecord(commitHash, recordRequired)
 			if (ignoredAtCheckpoint) {
 				await this.removeUntrackedFiles(this.git, ignoredAtCheckpoint)
 			} else {

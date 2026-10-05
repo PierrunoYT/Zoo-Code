@@ -321,6 +321,127 @@ describe.each([[RepoPerTaskCheckpointService, "RepoPerTaskCheckpointService"]])(
 			})
 
 			describe("restore with changed ignore rules (#1832)", () => {
+				it.each(["../HEAD", "..\\HEAD", "HEAD", "--help", "a".repeat(39), "a".repeat(41)])(
+					"rejects invalid hash %s before reading files or running Git",
+					async (hash) => {
+						service.on("error", vitest.fn())
+						const read = vitest.spyOn(fs, "readFile")
+						const git = service["git"]!
+						const raw = vitest.spyOn(git, "raw")
+						const clean = vitest.spyOn(git, "clean")
+						const reset = vitest.spyOn(git, "reset")
+						await expect(service.restoreCheckpoint(hash)).rejects.toThrow("Invalid checkpoint commit hash")
+						expect(read).not.toHaveBeenCalled()
+						expect(raw).not.toHaveBeenCalled()
+						expect(clean).not.toHaveBeenCalled()
+						expect(reset).not.toHaveBeenCalled()
+					},
+				)
+
+				it.each(["missing", "blob"])("rejects a %s object before cleanup", async (kind) => {
+					service.on("error", vitest.fn())
+					const git = service["git"]!
+					const hash = kind === "blob" ? await git.revparse(["HEAD:test.txt"]) : "a".repeat(40)
+					const read = vitest.spyOn(fs, "readFile")
+					const clean = vitest.spyOn(git, "clean")
+					const reset = vitest.spyOn(git, "reset")
+					await expect(service.restoreCheckpoint(hash)).rejects.toThrow()
+					expect(read).not.toHaveBeenCalled()
+					expect(clean).not.toHaveBeenCalled()
+					expect(reset).not.toHaveBeenCalled()
+				})
+
+				it("records files ignored before initialization for a baseHash restore", async () => {
+					const gitignore = path.join(service.workspaceDir, ".gitignore")
+					const secret = path.join(service.workspaceDir, "initial-secret.txt")
+					await fs.writeFile(gitignore, ".gitignore\ninitial-secret.txt\n")
+					await fs.writeFile(secret, "initial protection")
+					const initial = new klass(
+						taskId,
+						`${service.checkpointsDir}-initial`,
+						service.workspaceDir,
+						() => {},
+					)
+					await initial.initShadowGit()
+					const git = simpleGit(initial.checkpointsDir)
+					expect(await git.raw(["ls-files", "--", "initial-secret.txt"])).toBe("")
+					expect((await git.raw(["check-ignore", "initial-secret.txt"])).trim()).toBe("initial-secret.txt")
+					await fs.writeFile(gitignore, ".gitignore\n")
+					await fs.writeFile(testFile, "modified")
+					await initial.restoreCheckpoint(initial.baseHash!)
+					expect(await fs.readFile(secret, "utf8")).toBe("initial protection")
+					expect(await fs.readFile(testFile, "utf8")).toBe("Hello, world!")
+				})
+
+				it.each(["missing", "truncated", "invalid", "unreadable"])(
+					"refuses a new checkpoint with a %s record without changing workspace files",
+					async (failure) => {
+						service.on("error", vitest.fn())
+						const checkpoint = await service.saveCheckpoint("protected", { allowEmpty: true })
+						const recordPath = path.join(
+							service.checkpointsDir,
+							".git",
+							"zoo-checkpoint-ignored",
+							checkpoint!.commit,
+						)
+						if (failure === "missing") await fs.rm(recordPath)
+						if (failure === "truncated") await fs.writeFile(recordPath, 'Zoo-Checkpoint-Ignored: v1\n["')
+						if (failure === "invalid") await fs.writeFile(recordPath, "Zoo-Checkpoint-Ignored: v1\n[7]")
+						await fs.writeFile(testFile, "must not reset")
+						const untracked = path.join(service.workspaceDir, "must-not-clean.txt")
+						await fs.writeFile(untracked, "must not clean")
+						if (failure === "unreadable") {
+							vitest
+								.spyOn(fs, "readFile")
+								.mockRejectedValueOnce(Object.assign(new Error("denied"), { code: "EACCES" }))
+						}
+						await expect(service.restoreCheckpoint(checkpoint!.commit)).rejects.toThrow()
+						expect(await fs.readFile(testFile, "utf8")).toBe("must not reset")
+						expect(await fs.readFile(untracked, "utf8")).toBe("must not clean")
+					},
+				)
+
+				it.each(["initial", "saved"])(
+					"fails a %s checkpoint with unpublished metadata and refuses restore after restart",
+					async (phase) => {
+						const gitignore = path.join(service.workspaceDir, ".gitignore")
+						const secret = path.join(service.workspaceDir, "secret.txt")
+						await fs.writeFile(gitignore, ".gitignore\nsecret.txt\n")
+						await fs.writeFile(secret, "must survive")
+						if (phase === "initial") {
+							service = new klass(
+								taskId,
+								`${service.checkpointsDir}-failed`,
+								service.workspaceDir,
+								() => {},
+							)
+						}
+						service.on("error", vitest.fn())
+						const checkpointEvent = vitest.fn()
+						service.on("checkpoint", checkpointEvent)
+						const rename = vitest
+							.spyOn(fs, "rename")
+							.mockRejectedValueOnce(new Error("metadata publish failed"))
+						await expect(
+							phase === "initial"
+								? service.initShadowGit()
+								: service.saveCheckpoint("failed", { allowEmpty: true }),
+						).rejects.toThrow("metadata publish failed")
+						rename.mockRestore()
+						expect(service.getCheckpoints()).toEqual([])
+						expect(checkpointEvent).not.toHaveBeenCalled()
+						const failedHash = await simpleGit(service.checkpointsDir).revparse(["HEAD"])
+						service = new klass(taskId, service.checkpointsDir, service.workspaceDir, () => {})
+						service.on("error", vitest.fn())
+						await service.initShadowGit()
+						// A no-op save must not silently rebuild the lost record with later observations.
+						await expect(service.saveCheckpoint("retry without changes")).rejects.toThrow()
+						await fs.writeFile(gitignore, ".gitignore\n")
+						await expect(service.restoreCheckpoint(failedHash)).rejects.toThrow()
+						expect(await fs.readFile(secret, "utf8")).toBe("must survive")
+					},
+				)
+
 				it("keeps files that were ignored at checkpoint time when .gitignore was overwritten", async () => {
 					// The reported setup: .gitignore ignores itself, so it is never in a checkpoint.
 					const gitignore = path.join(service.workspaceDir, ".gitignore")
@@ -372,7 +493,7 @@ describe.each([[RepoPerTaskCheckpointService, "RepoPerTaskCheckpointService"]])(
 					expect(await fileExistsAtPath(path.dirname(createdAfter))).toBe(false)
 				})
 
-				it("restores checkpoints saved before ignore records existed with the previous clean", async () => {
+				it.each([false, true])("restores a legacy checkpoint (NUL-delimited record: %s)", async (hasRecord) => {
 					const gitignore = path.join(service.workspaceDir, ".gitignore")
 					const secret = path.join(service.workspaceDir, "legacy-secret.txt")
 					await fs.writeFile(gitignore, ".gitignore\nlegacy-secret.txt\n")
@@ -383,12 +504,15 @@ describe.each([[RepoPerTaskCheckpointService, "RepoPerTaskCheckpointService"]])(
 						"legacy-secret.txt",
 					)
 					await fs.writeFile(testFile, "checkpointed")
-					const checkpoint = await service.saveCheckpoint("legacy checkpoint")
-					// Simulate a checkpoint saved by an older version, which wrote no ignore record.
-					await fs.rm(path.join(service.checkpointsDir, ".git", "zoo-checkpoint-ignored"), {
-						recursive: true,
-						force: true,
-					})
+					// An old commit has no metadata-required marker in its message.
+					await shadowGit.add(".")
+					const checkpoint = await shadowGit.commit("legacy checkpoint")
+					if (hasRecord) {
+						await fs.writeFile(
+							path.join(service.checkpointsDir, ".git", "zoo-checkpoint-ignored", checkpoint.commit),
+							".gitignore\0legacy-secret.txt",
+						)
+					}
 					const createdAfter = path.join(service.workspaceDir, "created-after.txt")
 					await fs.writeFile(createdAfter, "new")
 					await fs.writeFile(gitignore, ".gitignore\n")
@@ -398,7 +522,7 @@ describe.each([[RepoPerTaskCheckpointService, "RepoPerTaskCheckpointService"]])(
 					expect(await fs.readFile(testFile, "utf-8")).toBe("checkpointed")
 					expect(await fileExistsAtPath(createdAfter)).toBe(false)
 					// Unlike recorded protection, legacy git clean only consults the current ignore rules.
-					expect(await fileExistsAtPath(secret)).toBe(false)
+					expect(await fileExistsAtPath(secret)).toBe(hasRecord)
 				})
 
 				it.each(["write", "rename"] as const)(
@@ -423,7 +547,10 @@ describe.each([[RepoPerTaskCheckpointService, "RepoPerTaskCheckpointService"]])(
 									})
 								: vitest.spyOn(fs, "rename").mockRejectedValueOnce(new Error("record rename failed"))
 
-						await expect(service.saveCheckpoint("no tracked changes")).resolves.toBeUndefined()
+						service.on("error", vitest.fn())
+						await expect(service.saveCheckpoint("no tracked changes")).rejects.toThrow(
+							`record ${failure} failed`,
+						)
 						expect(failureSpy).toHaveBeenCalledOnce()
 						failureSpy.mockRestore()
 						expect(await fs.readFile(recordPath, "utf8")).toBe(previous)
