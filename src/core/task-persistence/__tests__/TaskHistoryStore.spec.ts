@@ -530,6 +530,38 @@ describe("TaskHistoryStore", () => {
 
 	describe("refreshStrict()", () => {
 		it.each([
+			"",
+			".",
+			"..",
+			"../outside",
+			"..\\outside",
+			"child/../owner",
+			"/outside",
+			"C:outside",
+			".. ",
+			"child\u0000",
+		])("rejects unsafe task ID %j", async (taskId) => {
+			await store.initialize()
+			store.dispose()
+			await expect(store.refreshStrict(taskId)).rejects.toThrow("Invalid task ID")
+		})
+
+		it("does not load an escaped record even when its ID matches the traversal", async () => {
+			await store.initialize()
+			store.dispose()
+			const taskId = "../outside"
+			const outsideDir = path.join(tmpDir, "outside")
+			await fs.mkdir(outsideDir)
+			await fs.writeFile(
+				path.join(outsideDir, GlobalFileNames.historyItem),
+				JSON.stringify(makeHistoryItem({ id: taskId, status: "completed" })),
+			)
+
+			await expect(store.refreshStrict(taskId)).rejects.toThrow("Invalid task ID")
+			expect(store.get(taskId)).toBeUndefined()
+		})
+
+		it.each([
 			["missing", undefined],
 			["read-error", { code: "EISDIR" }],
 			["malformed", { name: "SyntaxError" }],

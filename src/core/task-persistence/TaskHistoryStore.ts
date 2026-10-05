@@ -801,7 +801,10 @@ export class TaskHistoryStore {
 			value !== "." &&
 			value !== ".." &&
 			!value.includes("/") &&
-			!value.includes("\\")
+			!value.includes("\\") &&
+			!value.includes(":") &&
+			!value.includes("\u0000") &&
+			!/[. ]$/.test(value)
 		)
 	}
 
@@ -1271,6 +1274,11 @@ export class TaskHistoryStore {
 	 * Get the path to a task's `history_item.json` file.
 	 */
 	private async getTaskFilePath(taskId: string): Promise<string> {
+		// IDs must be single directory names on every supported OS. This also rejects Windows
+		// drive/stream syntax and trailing-dot/space aliases before any history-file access.
+		if (!this.isSafeTaskId(taskId)) {
+			throw new Error(`Invalid task ID: ${JSON.stringify(taskId)}`)
+		}
 		const tasksDir = await this.getTasksDir()
 		return path.join(tasksDir, taskId, GlobalFileNames.historyItem)
 	}
