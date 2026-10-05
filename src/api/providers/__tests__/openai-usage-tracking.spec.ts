@@ -238,28 +238,35 @@ describe("OpenAiHandler with usage tracking fix", () => {
 		})
 	})
 
-	it("should report cached prompt tokens from a non-streaming response", async () => {
-		const nonStreamingHandler = new OpenAiHandler({ ...mockOptions, openAiStreamingEnabled: false })
-		mockCreate.mockImplementationOnce(async () => ({
-			id: "test-completion",
-			choices: [{ message: { role: "assistant", content: "Cached response" } }],
-			usage: {
-				prompt_tokens: 4_621,
-				completion_tokens: 16,
-				total_tokens: 4_637,
-				prompt_tokens_details: { cached_tokens: 4_608 },
-			},
-		}))
+	it.each(["gpt-4", "o3-mini"])(
+		"reports cached prompt tokens from a non-streaming %s response",
+		async (openAiModelId) => {
+			const nonStreamingHandler = new OpenAiHandler({
+				...mockOptions,
+				openAiModelId,
+				openAiStreamingEnabled: false,
+			})
+			mockCreate.mockImplementationOnce(async () => ({
+				id: "test-completion",
+				choices: [{ message: { role: "assistant", content: "Cached response" } }],
+				usage: {
+					prompt_tokens: 4_621,
+					completion_tokens: 16,
+					total_tokens: 4_637,
+					prompt_tokens_details: { cached_tokens: 4_608 },
+				},
+			}))
 
-		const chunks = await collectStream(nonStreamingHandler.createMessage("system prompt", []))
+			const chunks = await collectStream(nonStreamingHandler.createMessage("system prompt", []))
 
-		expect(chunks).toContainEqual({
-			type: "usage",
-			inputTokens: 4_621,
-			outputTokens: 16,
-			cacheReadTokens: 4_608,
-		})
-	})
+			expect(chunks).toContainEqual({
+				type: "usage",
+				inputTokens: 4_621,
+				outputTokens: 16,
+				cacheReadTokens: 4_608,
+			})
+		},
+	)
 
 	it("reports cached prompt tokens for a streaming O3 response", async () => {
 		const o3Handler = new OpenAiHandler({ ...mockOptions, openAiModelId: "o3-mini" })
@@ -350,7 +357,7 @@ describe("OpenAiHandler with usage tracking fix", () => {
 			["NaN", NaN, undefined],
 			["string", "23", undefined],
 			["object", { tokens: 23 }, undefined],
-			["exceeds input", 101, undefined],
+			["proxy cache reads exceed uncached input", 101, 101],
 		])("respects %s without substituting a conflicting fallback", async (_name, reported, expected) => {
 			const cacheHandler = new OpenAiHandler({ ...mockOptions, openAiStreamingEnabled })
 			const usage = {

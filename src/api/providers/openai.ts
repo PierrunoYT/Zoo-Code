@@ -300,7 +300,9 @@ export class OpenAiHandler extends BaseProvider implements SingleCompletionHandl
 			Number.isFinite(reportedCacheReadTokens) &&
 			Number.isInteger(reportedCacheReadTokens) &&
 			reportedCacheReadTokens >= 0 &&
-			reportedCacheReadTokens <= inputTokens
+			// Proxy-specific counters may exclude cache reads from prompt_tokens.
+			// Only OpenAI's nested cached_tokens must be a subset of prompt_tokens.
+			(usage?.cache_read_input_tokens != null || reportedCacheReadTokens <= inputTokens)
 				? reportedCacheReadTokens || undefined
 				: undefined
 
