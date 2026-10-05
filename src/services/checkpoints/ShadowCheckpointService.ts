@@ -288,17 +288,23 @@ export abstract class ShadowCheckpointService extends EventEmitter {
 
 	/** Adds the currently ignored paths to the record for a checkpoint; never fails the save. */
 	private async recordIgnoredPaths(git: SimpleGit, commitHash: string) {
+		const recordPath = this.ignoredRecordPath(commitHash)
+		const tempPath = `${recordPath}.${crypto.randomUUID()}.tmp`
 		try {
 			const ignored = new Set([
 				...((await this.readIgnoredRecord(commitHash)) ?? []),
 				...(await this.listIgnoredPaths(git)),
 			])
-			await fs.mkdir(path.dirname(this.ignoredRecordPath(commitHash)), { recursive: true })
-			await fs.writeFile(this.ignoredRecordPath(commitHash), [...ignored].join("\0"))
+			await fs.mkdir(path.dirname(recordPath), { recursive: true })
+			// A no-change save reuses the same commit. Never truncate its existing protection.
+			await fs.writeFile(tempPath, [...ignored].join("\0"))
+			await fs.rename(tempPath, recordPath)
 		} catch (error) {
 			this.log(
 				`[${this.constructor.name}#recordIgnoredPaths] failed to record ignored paths: ${error instanceof Error ? error.message : String(error)}`,
 			)
+		} finally {
+			await fs.rm(tempPath, { force: true }).catch(() => {})
 		}
 	}
 
@@ -307,37 +313,36 @@ export abstract class ShadowCheckpointService extends EventEmitter {
 	 * current rules nor the rules recorded when the checkpoint was saved.
 	 */
 	private async removeUntrackedFiles(git: SimpleGit, ignoredAtCheckpoint: string[]) {
-		const ignoredEntries = new Set(ignoredAtCheckpoint)
-		const ignoredDirs = ignoredAtCheckpoint.filter((entry) => entry.endsWith("/"))
+		const ignoredEntries = new Set([...ignoredAtCheckpoint, ...(await this.listIgnoredPaths(git))])
+		const ignoredDirs = [...ignoredEntries].filter((entry) => entry.endsWith("/"))
 		const wasIgnored = (relPath: string) =>
 			ignoredEntries.has(relPath) || ignoredDirs.some((dir) => relPath.startsWith(dir))
 
 		// --exclude-standard applies the current rules; nested repositories are listed as "dir/".
 		const output = await git.raw(["ls-files", "--others", "--exclude-standard", "-z"])
-		const removedDirs = new Set<string>()
 		for (const relPath of output.split("\0").filter(Boolean)) {
 			if (wasIgnored(relPath)) {
 				continue
 			}
 			const absPath = path.join(this.workspaceDir, relPath)
 			await fs.rm(absPath, { force: true, recursive: relPath.endsWith("/") })
-			removedDirs.add(path.dirname(absPath))
 		}
 
-		// Like `git clean -d`, remove directories left empty by the removal.
-		for (const dir of [...removedDirs].sort((a, b) => b.length - a.length)) {
-			let current = dir
-			while (current.startsWith(this.workspaceDir + path.sep)) {
-				try {
-					await fs.rmdir(current)
-				} catch (error) {
-					const code = error && typeof error === "object" && "code" in error ? error.code : undefined
-					if (code !== "ENOENT") {
-						break // Not empty: stop walking up.
-					}
-				}
-				current = path.dirname(current)
+		// --directory includes paths that never contained files. Walk these bottom-up,
+		// using only rmdir so a directory containing protected files is never deleted.
+		const removeEmptyDirectories = async (relDir: string): Promise<void> => {
+			if (wasIgnored(relDir)) return
+			const absDir = path.join(this.workspaceDir, relDir)
+			for (const entry of await fs.readdir(absDir, { withFileTypes: true })) {
+				if (entry.isDirectory()) await removeEmptyDirectories(`${relDir}${entry.name}/`)
 			}
+			await fs.rmdir(absDir).catch((error: NodeJS.ErrnoException) => {
+				if (error.code !== "ENOTEMPTY" && error.code !== "EEXIST" && error.code !== "ENOENT") throw error
+			})
+		}
+		const directories = await git.raw(["ls-files", "--others", "--exclude-standard", "--directory", "-z"])
+		for (const relPath of directories.split("\0").filter((entry) => entry.endsWith("/"))) {
+			await removeEmptyDirectories(relPath)
 		}
 	}
 
