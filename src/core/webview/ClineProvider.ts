@@ -2351,13 +2351,31 @@ export class ClineProvider
 			await this.updateTaskHistory(updatedHistoryItem)
 		} catch (error) {
 			if (messagesWithoutCheckpoints.length !== messages.length) {
-				await saveTaskMessages({ messages, taskId, globalStoragePath })
+				try {
+					await saveTaskMessages({ messages, taskId, globalStoragePath })
+				} catch (rollbackError) {
+					this.log(
+						`[resetTaskCheckpointsForWorkspaceChange] Failed to restore messages for ${taskId}: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`,
+					)
+				}
 			}
 			if (checkpointDirectoryStaged) {
-				await fs.rename(checkpointBackupDir, checkpointsDir)
+				try {
+					await fs.rename(checkpointBackupDir, checkpointsDir)
+				} catch (rollbackError) {
+					this.log(
+						`[resetTaskCheckpointsForWorkspaceChange] Failed to restore checkpoints for ${taskId} from ${checkpointBackupDir}: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`,
+					)
+				}
 			}
-			if (this.taskHistoryStore.get(taskId)?.workspace === updatedHistoryItem.workspace) {
-				await this.updateTaskHistory(originalHistoryItem)
+			try {
+				if (this.taskHistoryStore.get(taskId)?.workspace === updatedHistoryItem.workspace) {
+					await this.updateTaskHistory(originalHistoryItem)
+				}
+			} catch (rollbackError) {
+				this.log(
+					`[resetTaskCheckpointsForWorkspaceChange] Failed to restore history for ${taskId}: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`,
+				)
 			}
 			throw error
 		}
