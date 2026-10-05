@@ -257,7 +257,9 @@ describe("executeCommand", () => {
 			const nonExistentCwd = "/non/existent/path"
 
 			// Mock fs.access to throw error for non-existent directory
-			;(fs.access as any).mockRejectedValue(new Error("Directory does not exist"))
+			vitest
+				.mocked(fs.access)
+				.mockRejectedValue(Object.assign(new Error("Directory does not exist"), { code: "ENOENT" }))
 
 			const options: ExecuteCommandOptions = {
 				executionId: "test-123",
@@ -288,6 +290,21 @@ describe("executeCommand", () => {
 
 			expect(rejected).toBe(false)
 			expect(result).toBe(`Working directory '${filePath}' is not a directory.`)
+			expect(TerminalRegistry.getOrCreateTerminal).not.toHaveBeenCalled()
+		})
+
+		it("reports a non-directory ancestor instead of a missing working directory", async () => {
+			vitest
+				.mocked(fs.stat)
+				.mockRejectedValueOnce(Object.assign(new Error("Not a directory"), { code: "ENOTDIR" }))
+
+			const result = await executeCommandInTerminal(mockTask, {
+				executionId: "test-123",
+				command: "echo test",
+				customCwd: "/existing/file.txt/child",
+			})
+
+			expect(result).toEqual([false, "Working directory '/existing/file.txt/child' is not a directory."])
 			expect(TerminalRegistry.getOrCreateTerminal).not.toHaveBeenCalled()
 		})
 	})
