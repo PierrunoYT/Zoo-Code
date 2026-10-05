@@ -1203,14 +1203,16 @@ describe("Task persistence", () => {
 	// ── resumeTaskFromHistory — interrupted tool calls must be recorded as errors ──
 
 	describe("resumeTaskFromHistory interrupted tool calls", () => {
-		it("durably activates an interrupted task after the user accepts resume", async () => {
+		it("resumes a Task.create history task only once when run is also called", async () => {
 			mockReadTaskMessages.mockResolvedValue([])
 			mockReadApiMessages.mockResolvedValue([{ role: "user", content: "Continue" }])
 			mockProvider.taskHistoryStore.get = vi.fn().mockReturnValue({
 				id: "interrupted-child-resume",
 				status: "interrupted",
 			})
-			const task = new Task({
+			const acceptance = createDeferred<{ response: "yesButtonClicked" }>()
+			const initiateTaskLoop = vi.fn().mockResolvedValue(undefined)
+			const [task, createdRun] = Task.create({
 				provider: mockProvider,
 				apiConfiguration: mockApiConfig,
 				historyItem: {
@@ -1224,15 +1226,22 @@ describe("Task persistence", () => {
 					status: "interrupted",
 					parentTaskId: "parent",
 				},
-				startTask: false,
+				onCreated: (instance) => {
+					vi.spyOn(instance, "ask").mockReturnValue(acceptance.promise)
+					vi.spyOn(getTaskPersistenceAccess(instance), "initiateTaskLoop").mockImplementation(
+						initiateTaskLoop,
+					)
+				},
 			})
-			vi.spyOn(task, "ask").mockResolvedValue({ response: "yesButtonClicked" })
-			const initiateTaskLoop = vi
-				.spyOn(getTaskPersistenceAccess(task), "initiateTaskLoop")
-				.mockResolvedValue(undefined)
+			const scheduledRun = task.run()
+			expect(mockProvider.resumeInterruptedTask).not.toHaveBeenCalled()
+			acceptance.resolve({ response: "yesButtonClicked" })
+			await Promise.all([createdRun, scheduledRun])
 
-			await getTaskPersistenceAccess(task).resumeTaskFromHistory()
-
+			expect(scheduledRun).toBe(createdRun)
+			expect(task.run()).toBe(createdRun)
+			expect(task.ask).toHaveBeenCalledOnce()
+			expect(mockProvider.resumeInterruptedTask).toHaveBeenCalledOnce()
 			expect(mockProvider.resumeInterruptedTask).toHaveBeenCalledWith("interrupted-child-resume", "parent")
 			expect(initiateTaskLoop).toHaveBeenCalledOnce()
 		})
