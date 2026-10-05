@@ -3803,6 +3803,12 @@ export class ClineProvider
 				`[delegateParentAndOpenChild] Parent mismatch: expected ${parentTaskId}, current ${parent.taskId}`,
 			)
 		}
+		const assertParentAvailable = () => {
+			if (this._disposed || parent.abort || parent.abandoned || this.getCurrentTask() !== parent) {
+				throw new Error("[delegateParentAndOpenChild] Delegation cancelled before handoff")
+			}
+		}
+		assertParentAvailable()
 
 		// A different provider may have delegated this parent while this call
 		// waited on the shared lock. Refresh before mutating either task stack.
@@ -3900,6 +3906,7 @@ export class ClineProvider
 		// 3) Enforce single-open invariant by closing/disposing the parent first
 		//    This ensures we never have >1 tasks open at any time during delegation.
 		//    Await abort completion to ensure clean disposal and prevent unhandled rejections.
+		assertParentAvailable()
 		try {
 			await this.removeClineFromStack()
 		} catch (error) {
@@ -3909,6 +3916,10 @@ export class ClineProvider
 				}`,
 			)
 			// Non-fatal: proceed with child creation even if parent cleanup had issues
+		}
+		// Parent abort/abandon now belongs to our intentional eviction, not cancellation.
+		if (this._disposed) {
+			throw new Error("[delegateParentAndOpenChild] Provider disposed during handoff")
 		}
 
 		// 4) Bind the child directly to the delegating task's local provider
@@ -3944,7 +3955,11 @@ export class ClineProvider
 		//    synchronously under the store lock) so a concurrent abandon or completion cannot
 		//    slip between the status snapshot and the write. An active child must never be
 		//    silently detached.
+		let delegationCommitted = false
 		try {
+			if (this._disposed || child.abort || child.abandoned) {
+				throw new Error("[delegateParentAndOpenChild] Delegation cancelled during child creation")
+			}
 			await this.taskHistoryStore.atomicReadAndUpdate(parentTaskId, (historyItem) => {
 				if (pendingActionId && historyItem.pendingAction?.actionId !== pendingActionId) {
 					throw new Error(
@@ -3964,6 +3979,7 @@ export class ClineProvider
 						delegated.pendingAction?.actionId === pendingActionId ? undefined : delegated.pendingAction,
 				}
 			})
+			delegationCommitted = true
 			this.recentTasksCache = undefined
 			if (this.isViewLaunched) {
 				const updatedItem = this.taskHistoryStore.get(parentTaskId)
@@ -3971,7 +3987,27 @@ export class ClineProvider
 					await this.postMessageToWebview({ type: "taskHistoryItemUpdated", taskHistoryItem: updatedItem })
 				}
 			}
+			if (this._disposed || child.abort || child.abandoned) {
+				throw new Error("[delegateParentAndOpenChild] Delegation cancelled before scheduling")
+			}
 		} catch (err) {
+			const cancelled = this._disposed || child.abort || child.abandoned
+			if (cancelled && delegationCommitted) {
+				// Keep a committed handoff recoverable, but never start it after teardown.
+				// We already own the parent transition lock, so do not call eviction's
+				// lock-taking interruption helper here.
+				if (this.getCurrentTask()?.taskId === child.taskId) await this.removeClineFromStack()
+				await ClineProvider.prototype.drainTaskDisposal.call(this, child)
+				const parentHistory = this.taskHistoryStore.get(parentTaskId)
+				if (parentHistory?.awaitingChildId === child.taskId) {
+					await this.taskHistoryStore.atomicReadAndUpdate(child.taskId, (historyItem) =>
+						historyItem.status === "active"
+							? interruptDelegatedChild(parentHistory, historyItem)
+							: historyItem,
+					)
+				}
+				throw err
+			}
 			this.log(
 				`[delegateParentAndOpenChild] Failed to persist parent metadata for ${parentTaskId} -> ${child.taskId}: ${
 					(err as Error)?.message ?? String(err)
@@ -4008,6 +4044,7 @@ export class ClineProvider
 				if (this.getCurrentTask()?.taskId === child.taskId) {
 					await this.removeClineFromStack()
 				}
+				if (cancelled) await child.dispose()
 			} catch (cleanupError) {
 				this.log(
 					`[delegateParentAndOpenChild] Failed to close paused child ${child.taskId} during rollback: ${
@@ -4026,7 +4063,7 @@ export class ClineProvider
 			}
 			try {
 				// Never restore a pending action whose authoritative settlement failed.
-				if (!settlementFailed) {
+				if (!settlementFailed && !cancelled && !this._disposed) {
 					const { historyItem: parentHistory } = await this.getTaskWithId(parentTaskId)
 					if (pendingActionId && parentHistory.pendingAction?.actionId === pendingActionId) {
 						// Resolve the failed action durably BEFORE restoring the parent. Otherwise

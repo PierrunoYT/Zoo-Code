@@ -3170,6 +3170,9 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 		}
 
 		let { response, text, images, queuedMessageId } = await this.ask("tool", action.approvalText, false)
+		if (this.abort || this.abandoned) {
+			return
+		}
 
 		if (response === "yesButtonClicked") {
 			if (action.kind === "create_subtask") {

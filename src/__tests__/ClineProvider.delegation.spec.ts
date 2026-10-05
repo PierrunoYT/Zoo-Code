@@ -11,6 +11,7 @@ import { ClineProvider } from "../core/webview/ClineProvider"
 import { TaskScheduler } from "../core/task/TaskScheduler"
 import { LifecycleTransitionError } from "../core/task-persistence"
 import { readApiMessages, saveApiMessages, type ApiMessage } from "../core/task-persistence/apiMessages"
+import { makeProviderStub } from "./helpers/provider-stub"
 
 vi.mock("../core/task-persistence/apiMessages", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../core/task-persistence/apiMessages")>()),
@@ -59,6 +60,105 @@ const makeParentTask = () =>
 	}) as any
 
 describe("ClineProvider.delegateParentAndOpenChild()", () => {
+	it.each([
+		["entry-abort", false, false],
+		["entry-abandon", false, false],
+		["entry-dispose", false, false],
+		["flush-abort", false, false],
+		["flush-dispose", false, false],
+		["evict-dispose", false, false],
+		["create-dispose", true, false],
+		["create-abort", true, false],
+		["commit-dispose", true, true],
+		["commit-abort", true, true],
+		["publish-dispose", true, true],
+	] as const)("stops cancelled handoff at %s", async (phase, created, committed) => {
+		const parent = makeParentTask()
+		const child = {
+			taskId: "child-1",
+			abort: false,
+			abandoned: false,
+			run: vi.fn(),
+			dispose: vi.fn().mockResolvedValue(undefined),
+		}
+		let current: { taskId: string } | undefined = parent
+		const records = new Map<string, HistoryItem>([["parent-1", { ...parentHistoryItem, status: "interrupted" }]])
+		const cancel = () => {
+			if (phase.endsWith("abort")) {
+				if (created) child.abort = true
+				else parent.abort = true
+			} else if (phase.endsWith("abandon")) parent.abandoned = true
+			else provider["_disposed"] = true
+		}
+		const store = {
+			invalidate: vi.fn().mockResolvedValue(undefined),
+			get: (id: string) => records.get(id),
+			atomicReadAndUpdate: vi.fn(async (id: string, update: (item: HistoryItem) => HistoryItem) => {
+				records.set(id, update(records.get(id)!))
+				if (id === "parent-1" && phase.startsWith("commit")) cancel()
+				return [...records.values()]
+			}),
+		}
+		const schedule = vi.fn()
+		const restore = vi.fn()
+		const create = vi.fn(async () => {
+			current = child
+			records.set(child.taskId, {
+				...parentHistoryItem,
+				id: child.taskId,
+				status: "active",
+				parentTaskId: "parent-1",
+			})
+			if (phase.startsWith("create")) cancel()
+			return child
+		})
+		const provider = makeProviderStub({
+			taskHistoryStore: store,
+			taskScheduler: { schedule },
+			createTask: create,
+			createTaskWithHistoryItem: restore,
+			getCurrentTask: () => current,
+			isViewLaunched: true,
+			emit: vi.fn(),
+			postMessageToWebview: vi.fn(async () => {
+				if (phase.startsWith("publish")) cancel()
+			}),
+			deleteTaskWithId: vi.fn(async (id: string) => {
+				records.delete(id)
+			}),
+			removeClineFromStack: vi.fn(async () => {
+				if (current === parent) {
+					parent.abort = true
+					parent.abandoned = true
+				}
+				current = undefined
+				if (phase.startsWith("evict")) cancel()
+			}),
+		})
+		parent.flushPendingToolResultsToHistory.mockImplementation(async () => {
+			if (phase.startsWith("flush")) cancel()
+			return true
+		})
+		if (phase.startsWith("entry")) cancel()
+		await expect(
+			ClineProvider.prototype.delegateParentAndOpenChild.call(provider, {
+				parentTaskId: "parent-1",
+				message: "Child",
+				initialTodos: [],
+				mode: "code",
+			}),
+		).rejects.toThrow(/cancelled|disposed/)
+		expect(create).toHaveBeenCalledTimes(created ? 1 : 0)
+		expect(schedule).not.toHaveBeenCalled()
+		expect(child.run).not.toHaveBeenCalled()
+		expect(restore).not.toHaveBeenCalled()
+		if (created) expect(child.dispose).toHaveBeenCalledOnce()
+		if (committed) {
+			expect(records.get("parent-1")).toMatchObject({ status: "delegated", awaitingChildId: "child-1" })
+			expect(records.get("child-1")).toMatchObject({ status: "interrupted", parentTaskId: "parent-1" })
+		} else expect(records.has("child-1")).toBe(false)
+	})
+
 	it("stops before delegation when refreshing the interrupted task's owner fails", async () => {
 		const parentTask = makeParentTask()
 		const historyItem: HistoryItem = {
@@ -587,10 +687,11 @@ describe("ClineProvider.delegateParentAndOpenChild()", () => {
 			}),
 		})
 
+		const parentTask = makeParentTask()
 		const provider = {
 			taskScheduler: new TaskScheduler(),
 			emit: vi.fn(),
-			getCurrentTask: vi.fn(() => makeParentTask()),
+			getCurrentTask: vi.fn(() => parentTask),
 			removeClineFromStack: vi.fn().mockResolvedValue(undefined),
 			createTask: vi.fn().mockResolvedValue({ taskId: "child-2", start: vi.fn(), run: () => Promise.resolve() }),
 			handleModeSwitch: vi.fn().mockResolvedValue(undefined),

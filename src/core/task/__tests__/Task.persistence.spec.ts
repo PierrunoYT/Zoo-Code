@@ -1363,6 +1363,22 @@ describe("Task persistence", () => {
 			todos: [],
 		}
 
+		it.each(["abort", "dispose"] as const)(
+			"does not delegate when %s wins pending approval",
+			async (cancellation) => {
+				const task = new Task({ provider: mockProvider, apiConfiguration: mockApiConfig, startTask: false })
+				const approval = createDeferred<{ response: "yesButtonClicked" }>()
+				vi.spyOn(task, "ask").mockReturnValue(approval.promise)
+				mockProvider.delegateParentAndOpenChild = vi.fn()
+				const resume = task["resumePendingTaskAction"](createSubtaskAction)
+				if (cancellation === "dispose") await task.dispose()
+				else task.abort = true
+				approval.resolve({ response: "yesButtonClicked" })
+				await resume
+				expect(mockProvider.delegateParentAndOpenChild).not.toHaveBeenCalled()
+			},
+		)
+
 		it("replays an unresolved pending action instead of a generic resume ask", async () => {
 			const messages: ClineMessage[] = [
 				{ ts: 1, type: "say", say: "text", text: "Child" },
