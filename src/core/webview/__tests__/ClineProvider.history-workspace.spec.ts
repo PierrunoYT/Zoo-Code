@@ -6,6 +6,7 @@ import * as vscode from "vscode"
 import type { HistoryItem } from "@roo-code/types"
 
 import { ClineProvider } from "../ClineProvider"
+import * as taskMessages from "../../task-persistence/taskMessages"
 
 const historyItem = (workspace: string): HistoryItem => ({
 	id: "task-1602",
@@ -194,6 +195,88 @@ describe("ClineProvider historical workspace selection", () => {
 			await fs.rm(storagePath, { recursive: true, force: true })
 		}
 	})
+
+	it.each([
+		{ failures: ["messages"] },
+		{ failures: ["checkpoints"] },
+		{ failures: ["history"] },
+		{ failures: ["messages", "checkpoints", "history"] },
+	])(
+		"attempts every rollback and preserves the original error when $failures restoration fails",
+		async ({ failures }) => {
+			const storagePath = await fs.mkdtemp(path.join(os.tmpdir(), "zoo-history-workspace-rollback-failure-"))
+			const taskDir = path.join(storagePath, "tasks", "task-1602")
+			const checkpointsDir = path.join(taskDir, "checkpoints")
+			const messagesPath = path.join(taskDir, "ui_messages.json")
+			const originalMessages = [
+				{ type: "say", say: "task", ts: 1, text: "Continue" },
+				{ type: "say", say: "checkpoint_saved", ts: 2, text: "old-hash" },
+			]
+			await fs.mkdir(checkpointsDir, { recursive: true })
+			await fs.writeFile(path.join(checkpointsDir, "HEAD"), "old checkpoint")
+			await fs.writeFile(messagesPath, JSON.stringify(originalMessages))
+
+			const provider = createProvider("/current/workspace")
+			const original = historyItem("/old/worktree")
+			const updated = { ...original, workspace: "/current/workspace" }
+			Object.defineProperty(provider, "contextProxy", {
+				value: { globalStorageUri: { fsPath: storagePath } },
+			})
+			// History can already be committed when broadcasting the update fails.
+			Object.defineProperty(provider, "taskHistoryStore", { value: { get: vi.fn().mockReturnValue(updated) } })
+			const originalError = new Error("history broadcast failed")
+			const updateHistory = vi.fn<ClineProvider["updateTaskHistory"]>().mockRejectedValueOnce(originalError)
+			if (failures.includes("history")) {
+				updateHistory.mockRejectedValueOnce(new Error("history restore failed"))
+			} else {
+				updateHistory.mockResolvedValueOnce([original])
+			}
+			provider.updateTaskHistory = updateHistory
+			provider["log"] = vi.fn()
+			const saveMessages = taskMessages.saveTaskMessages
+			const save = vi.spyOn(taskMessages, "saveTaskMessages").mockImplementationOnce(saveMessages)
+			if (failures.includes("messages")) {
+				save.mockRejectedValueOnce(new Error("messages restore failed"))
+			}
+			const rename = fs.rename
+			const renameSpy = vi.spyOn(fs, "rename").mockImplementation(async (source, destination) => {
+				if (destination === checkpointsDir && failures.includes("checkpoints")) {
+					throw new Error("checkpoints restore failed")
+				}
+				await rename(source, destination)
+			})
+
+			try {
+				await expect(provider["resetTaskCheckpointsForWorkspaceChange"](original, updated)).rejects.toBe(
+					originalError,
+				)
+				expect(save).toHaveBeenCalledTimes(2)
+				expect(save.mock.calls[1][0]).toMatchObject({
+					messages: originalMessages,
+					taskId: original.id,
+					globalStoragePath: storagePath,
+				})
+				expect(renameSpy).toHaveBeenCalledWith(
+					expect.stringContaining("checkpoints.workspace-change-"),
+					checkpointsDir,
+				)
+				expect(updateHistory).toHaveBeenCalledTimes(2)
+				expect(updateHistory).toHaveBeenLastCalledWith(original)
+				expect(provider["log"]).toHaveBeenCalledTimes(failures.length)
+				for (const failure of failures) {
+					expect(provider["log"]).toHaveBeenCalledWith(expect.stringContaining(`${failure} restore failed`))
+				}
+				if (!failures.includes("messages")) {
+					expect(JSON.parse(await fs.readFile(messagesPath, "utf8"))).toMatchObject(originalMessages)
+				}
+				if (!failures.includes("checkpoints")) {
+					await expect(fs.readFile(path.join(checkpointsDir, "HEAD"), "utf8")).resolves.toBe("old checkpoint")
+				}
+			} finally {
+				await fs.rm(storagePath, { recursive: true, force: true })
+			}
+		},
+	)
 
 	it("keeps committed history when checkpoint backup cleanup fails", async () => {
 		const storagePath = await fs.mkdtemp(path.join(os.tmpdir(), "zoo-history-workspace-cleanup-"))
