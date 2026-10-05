@@ -564,7 +564,7 @@
 		"awsCatalogSelect": "Modèles régionaux et profils d'inférence",
 		"awsCatalogEmpty": "Aucun modèle de texte en streaming ni profil actif renvoyé",
 		"awsCatalogKinds": {
-			"regional": "Modèle de fondation — à la demande dans cette région, aucun profil d'inférence requis",
+			"regional": "Modèle de fondation — à la demande dans cette région ; un appel direct peut nécessiter un profil d'inférence",
 			"geographic": "Profil d'inférence géographique",
 			"global": "Profil d'inférence global — mondial",
 			"application": "Profil d'application — vérifier les destinations dans AWS"

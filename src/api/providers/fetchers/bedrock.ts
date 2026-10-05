@@ -11,6 +11,8 @@ export async function getBedrockCatalog(options: ProviderSettings): Promise<Bedr
 	if (!options.awsRegion) throw new Error("Select an AWS region before refreshing the catalogue.")
 	if (options.awsUseApiKey)
 		throw new Error("Catalogue discovery requires AWS IAM credentials or an AWS profile, not a Bedrock API key.")
+	if (options.awsUseProfile && !options.awsProfile?.trim())
+		throw new Error("Select an AWS profile before refreshing the catalogue.")
 	const proxy = getSystemProxyUrl()
 	const client = new BedrockClient({
 		region: options.awsRegion,

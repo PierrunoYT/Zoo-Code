@@ -81,12 +81,34 @@ it("uses the selected region and credentials, and includes every profile page wi
 it("uses a profile and releases the client on permission failure without fabricating availability", async () => {
 	send.mockRejectedValue(new Error("AccessDenied"))
 	await expect(
-		getBedrockCatalog({ awsRegion: "us-east-1", awsUseProfile: true, awsProfile: "work" }),
+		getBedrockCatalog({
+			awsRegion: "us-east-1",
+			awsUseProfile: true,
+			awsProfile: "work",
+			awsAccessKey: "retained-key",
+			awsSecretKey: "retained-secret",
+		}),
 	).rejects.toThrow("AccessDenied")
 	expect(fromIni).toHaveBeenCalledWith({ profile: "work", ignoreCache: true })
 	expect(BedrockClient).toHaveBeenCalledWith(expect.objectContaining({ credentials: "profile-provider" }))
 	expect(destroy).toHaveBeenCalledOnce()
 })
+
+it.each([undefined, "", "  "])(
+	"rejects incomplete profile mode (%j) without using retained keys",
+	async (awsProfile) => {
+		await expect(
+			getBedrockCatalog({
+				awsRegion: "eu-west-3",
+				awsUseProfile: true,
+				awsProfile,
+				awsAccessKey: "retained-key",
+				awsSecretKey: "retained-secret",
+			}),
+		).rejects.toThrow("Select an AWS profile")
+		expect(BedrockClient).not.toHaveBeenCalled()
+	},
+)
 
 it("does not silently use the default credential chain when API-key authentication is selected", async () => {
 	await expect(getBedrockCatalog({ awsRegion: "eu-west-3", awsUseApiKey: true })).rejects.toThrow("IAM credentials")

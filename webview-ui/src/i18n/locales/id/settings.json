@@ -564,7 +564,7 @@
 		"awsCatalogSelect": "Model regional dan profil inferensi",
 		"awsCatalogEmpty": "Tidak ada model teks streaming atau profil aktif yang dikembalikan",
 		"awsCatalogKinds": {
-			"regional": "Model dasar — on-demand di wilayah ini, tidak perlu profil inferensi",
+			"regional": "Model dasar — on-demand di wilayah ini; pemanggilan langsung mungkin memerlukan profil inferensi",
 			"geographic": "Profil inferensi geografis",
 			"global": "Profil inferensi global — seluruh dunia",
 			"application": "Profil aplikasi — periksa tujuan di AWS"

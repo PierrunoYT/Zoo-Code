@@ -644,7 +644,7 @@
 		"awsCatalogSelect": "Regional models and inference profiles",
 		"awsCatalogEmpty": "No streaming text models or active profiles returned",
 		"awsCatalogKinds": {
-			"regional": "Foundation model — on-demand in this region, no inference profile needed",
+			"regional": "Foundation model — on-demand in this region; direct invocation may require an inference profile",
 			"geographic": "Geographic inference profile",
 			"global": "Global inference profile — worldwide",
 			"application": "Application profile — check destinations in AWS"

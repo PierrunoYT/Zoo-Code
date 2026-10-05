@@ -564,7 +564,7 @@
 		"awsCatalogSelect": "Regionale Modelle und Inferenzprofile",
 		"awsCatalogEmpty": "Keine Textmodelle mit Streaming oder aktive Profile zurückgegeben",
 		"awsCatalogKinds": {
-			"regional": "Basismodell — On-Demand in dieser Region, kein Inferenzprofil erforderlich",
+			"regional": "Basismodell — On-Demand in dieser Region; direkte Aufrufe können ein Inferenzprofil erfordern",
 			"geographic": "Geografisches Inferenzprofil",
 			"global": "Globales Inferenzprofil — weltweit",
 			"application": "Anwendungsprofil — Zielregionen in AWS prüfen"

@@ -51,7 +51,7 @@ export function BedrockCatalog({
 		<div className="flex flex-col gap-2">
 			<Button
 				variant="secondary"
-				disabled={loading || !awsRegion || awsUseApiKey}
+				disabled={loading || !awsRegion || awsUseApiKey || (!!awsUseProfile && !awsProfile?.trim())}
 				onClick={() => {
 					requestId.current = crypto.randomUUID()
 					setLoading(true)
@@ -62,11 +62,9 @@ export function BedrockCatalog({
 						requestId: requestId.current,
 						apiConfiguration: {
 							awsRegion,
-							awsAccessKey,
-							awsSecretKey,
-							awsSessionToken,
-							awsProfile,
-							awsUseProfile,
+							...(awsUseProfile
+								? { awsProfile, awsUseProfile: true }
+								: { awsAccessKey, awsSecretKey, awsSessionToken, awsUseProfile: false }),
 							awsUseApiKey,
 						},
 					})
@@ -95,9 +93,9 @@ export function BedrockCatalog({
 								)}
 							/>
 						</SelectTrigger>
-						<SelectContent>
+						<SelectContent className="w-[var(--radix-select-trigger-width)]">
 							{models.map((model) => (
-								<SelectItem key={model.arn} value={model.arn}>
+								<SelectItem key={model.arn} value={model.arn} className="whitespace-normal break-words">
 									{model.name} — {t(`settings:providers.awsCatalogKinds.${model.kind}`)}
 								</SelectItem>
 							))}

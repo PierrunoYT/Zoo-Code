@@ -30,6 +30,48 @@ vi.mock("@src/components/ui", () => ({
 
 beforeEach(() => vi.clearAllMocks())
 
+it.each([undefined, "", "  "])("disables incomplete profile discovery (%j)", (awsProfile) => {
+	render(
+		<BedrockCatalog
+			apiConfiguration={{
+				awsRegion: "eu-west-3",
+				awsUseProfile: true,
+				awsProfile,
+				awsAccessKey: "retained-key",
+				awsSecretKey: "retained-secret",
+			}}
+			onSelect={vi.fn()}
+		/>,
+	)
+	expect(screen.getByRole("button")).toBeDisabled()
+	fireEvent.click(screen.getByRole("button"))
+	expect(vscode.postMessage).not.toHaveBeenCalled()
+})
+
+it.each([true, false])("sends only credentials for the selected mode (profile=%s)", (awsUseProfile) => {
+	render(
+		<BedrockCatalog
+			apiConfiguration={{
+				awsRegion: "eu-west-3",
+				awsUseProfile,
+				awsProfile: "work",
+				awsAccessKey: "key",
+				awsSecretKey: "secret",
+				awsSessionToken: "session",
+			}}
+			onSelect={vi.fn()}
+		/>,
+	)
+	fireEvent.click(screen.getByRole("button"))
+	expect(vi.mocked(vscode.postMessage).mock.calls[0][0].apiConfiguration).toEqual({
+		awsRegion: "eu-west-3",
+		awsUseProfile,
+		...(awsUseProfile
+			? { awsProfile: "work" }
+			: { awsAccessKey: "key", awsSecretKey: "secret", awsSessionToken: "session" }),
+	})
+})
+
 it.each([{ awsRegion: "us-east-1" }, { awsProfile: "other" }])(
 	"ignores stale catalogue replies after connection settings change: %j",
 	(change) => {

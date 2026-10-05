@@ -564,7 +564,7 @@
 		"awsCatalogSelect": "区域模型和推理配置文件",
 		"awsCatalogEmpty": "未返回流式文本模型或活动配置文件",
 		"awsCatalogKinds": {
-			"regional": "基础模型 — 在此区域按需可用，无需推理配置文件",
+			"regional": "基础模型 — 在此区域按需可用；直接调用可能需要推理配置文件",
 			"geographic": "地理推理配置文件",
 			"global": "全局推理配置文件 — 全球",
 			"application": "应用程序配置文件 — 请在 AWS 中检查目标区域"

@@ -564,7 +564,7 @@
 		"awsCatalogSelect": "Regionale modellen en inferentieprofielen",
 		"awsCatalogEmpty": "Geen streamingtekstmodellen of actieve profielen teruggegeven",
 		"awsCatalogKinds": {
-			"regional": "Basismodel — on-demand in deze regio, geen inferentieprofiel nodig",
+			"regional": "Basismodel — on-demand in deze regio; directe aanroepen kunnen een inferentieprofiel vereisen",
 			"geographic": "Geografisch inferentieprofiel",
 			"global": "Globaal inferentieprofiel — wereldwijd",
 			"application": "Applicatieprofiel — controleer bestemmingen in AWS"
