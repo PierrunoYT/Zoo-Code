@@ -12,6 +12,8 @@ import { safeWriteJson } from "../../utils/safeWriteJson"
 import { getStorageBasePath } from "../../utils/storage"
 import {
 	assertValidTransition,
+	LifecycleTransitionError,
+	resumeInterruptedChild,
 	resumeInterruptedTask as resumeInterruptedTaskRecord,
 	settleRejectedCreateSubtaskAction,
 	type HistoryItemStatus,
@@ -901,6 +903,28 @@ export class TaskHistoryStore {
 		}
 	}
 
+	/**
+	 * Read the canonical on-disk record for one task, failing closed with a
+	 * typed lifecycle error when the record is missing, malformed, or
+	 * persisted under a different task ID. Locked authoritative transitions
+	 * call this before they write, so a cached record never replaces unknown
+	 * disk state.
+	 */
+	private async readValidatedTaskFile(taskId: string): Promise<HistoryItem> {
+		const filePath = await this.getTaskFilePath(taskId)
+		let parsed: unknown
+		try {
+			parsed = JSON.parse(await fs.readFile(filePath, "utf8"))
+		} catch {
+			throw new LifecycleTransitionError(`[TaskHistoryStore] task ${taskId} has no valid disk record`)
+		}
+		const result = historyItemSchema.safeParse(parsed)
+		if (!result.success || result.data.id !== taskId) {
+			throw new LifecycleTransitionError(`[TaskHistoryStore] task ${taskId} has no valid disk record`)
+		}
+		return result.data as HistoryItem
+	}
+
 	// ────────────────────────────── Private: fs.watch ──────────────────────────────
 
 	/**
@@ -1081,41 +1105,124 @@ export class TaskHistoryStore {
 	/**
 	 * Disk-authoritative transition used only after the user accepts a resume
 	 * prompt. Generic writes intentionally reject interrupted → active so stale
-	 * task snapshots cannot revive cancelled work.
+	 * task snapshots cannot revive cancelled work. Failures for a missing
+	 * cache entry or an invalid disk record throw `LifecycleTransitionError`
+	 * so callers can settle the failed task without deleting its history.
 	 */
 	public async resumeInterruptedTask(taskId: string, expectedParentTaskId?: string): Promise<HistoryItem> {
 		return this.withLock(async () => {
 			const cached = this.cache.get(taskId)
 			if (!cached) {
-				throw new Error(`[TaskHistoryStore] resumeInterruptedTask: task ${taskId} not found in cache`)
+				throw new LifecycleTransitionError(
+					`[TaskHistoryStore] resumeInterruptedTask: task ${taskId} not found in cache`,
+				)
 			}
 
 			const filePath = await this.getTaskFilePath(taskId)
 			let authoritative: HistoryItem = cached
-			await safeWriteJson(filePath, cached, {
-				merge: (existing) => {
-					const parsed = historyItemSchema.safeParse(existing)
-					if (!parsed.success || parsed.data.id !== taskId) {
-						this.cache.delete(taskId)
-						this.taskFileMtimes.delete(taskId)
-						throw new Error(
-							`[TaskHistoryStore] resumeInterruptedTask: task ${taskId} has no valid disk record`,
-						)
-					}
+			const activate = async (parent?: HistoryItem): Promise<void> => {
+				await safeWriteJson(filePath, cached, {
+					merge: (existing) => {
+						const parsed = historyItemSchema.safeParse(existing)
+						if (!parsed.success || parsed.data.id !== taskId) {
+							this.cache.delete(taskId)
+							this.taskFileMtimes.delete(taskId)
+							throw new LifecycleTransitionError(
+								`[TaskHistoryStore] resumeInterruptedTask: task ${taskId} has no valid disk record`,
+							)
+						}
 
-					// Abandonment commits child detachment before releasing the parent.
-					// Compare the caller's linkage under this same child-file lock.
-					this.cache.set(taskId, existing as HistoryItem)
-					authoritative = resumeInterruptedTaskRecord(existing as HistoryItem, expectedParentTaskId)
-					return authoritative
-				},
-			})
+						// Abandonment commits child detachment before releasing
+						// the parent. Compare the caller's linkage under this
+						// same child-file lock. The caller still holds the
+						// parent-file lock when a parent record is provided.
+						this.cache.set(taskId, existing as HistoryItem)
+						authoritative =
+							parent !== undefined
+								? resumeInterruptedChild(parent, existing as HistoryItem)
+								: resumeInterruptedTaskRecord(existing as HistoryItem, undefined)
+						return authoritative
+					},
+				})
+			}
+
+			if (expectedParentTaskId === undefined) {
+				await activate()
+			} else {
+				const parentFilePath = await this.getTaskFilePath(expectedParentTaskId)
+				await withFileLock(parentFilePath, async () => {
+					const parent = await this.readValidatedTaskFile(expectedParentTaskId)
+					await activate(parent)
+				})
+			}
 
 			this.cache.set(taskId, authoritative)
 			if (this.onWrite) {
 				await this.onWrite(this.getAll())
 			}
 			return authoritative
+		})
+	}
+
+	/**
+	 * Disk-authoritative delegation write for the provider's delegation flow.
+	 * The builder runs against the on-disk parent record inside the parent
+	 * file's advisory lock, so a competing host cannot change the parent or
+	 * its awaited child between validation and commit. When the disk parent is
+	 * delegated, its awaited child's on-disk record must still be interrupted.
+	 * A host with a stale cache cannot re-delegate over a child another host
+	 * has already resumed. First delegation from an active parent commits
+	 * through the same lock-held window.
+	 */
+	public async atomicUpdateParentDelegation(
+		parentTaskId: string,
+		build: (diskParent: HistoryItem, awaitedChildDiskStatus: HistoryItemStatus | undefined) => HistoryItem,
+	): Promise<HistoryItem> {
+		return this.withLock(async () => {
+			const cached = this.cache.get(parentTaskId)
+			if (!cached) {
+				throw new LifecycleTransitionError(
+					`[TaskHistoryStore] atomicUpdateParentDelegation: task ${parentTaskId} not found in cache`,
+				)
+			}
+
+			const parentFilePath = await this.getTaskFilePath(parentTaskId)
+			return withFileLock(parentFilePath, async () => {
+				const diskParent = await this.readValidatedTaskFile(parentTaskId)
+				let awaitedChildDiskStatus: HistoryItemStatus | undefined
+				if (diskParent.status === "delegated") {
+					const awaitedChildId = diskParent.awaitingChildId
+					if (!awaitedChildId) {
+						throw new LifecycleTransitionError(
+							`[TaskHistoryStore] atomicUpdateParentDelegation: delegated task ${parentTaskId} has no awaited child`,
+						)
+					}
+					const awaitedChild = await this.readValidatedTaskFile(awaitedChildId)
+					awaitedChildDiskStatus = awaitedChild.status
+					if (awaitedChildDiskStatus !== "interrupted") {
+						throw new LifecycleTransitionError(
+							`[TaskHistoryStore] atomicUpdateParentDelegation: awaited child ${awaitedChildId} of task ${parentTaskId} is ${awaitedChildDiskStatus ?? "active"}, not interrupted`,
+						)
+					}
+				}
+
+				const next = build(diskParent, awaitedChildDiskStatus)
+				if (next.id !== parentTaskId) {
+					throw new Error(
+						`[TaskHistoryStore] atomicUpdateParentDelegation: builder changed task id from ${parentTaskId} to ${next.id}`,
+					)
+				}
+
+				const delta = this.buildDelta(parentTaskId, cached, next)
+				const merged = mergeHistoryDelta(diskParent, next, delta)
+				await safeWriteJson(parentFilePath, merged, { assumeLockHeld: true })
+
+				this.cache.set(parentTaskId, merged)
+				if (this.onWrite) {
+					await this.onWrite(this.getAll())
+				}
+				return merged
+			})
 		})
 	}
 

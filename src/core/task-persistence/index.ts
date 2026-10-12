@@ -21,6 +21,7 @@ export {
 	delegateTaskToChild,
 	interruptDelegatedChild,
 	LifecycleTransitionError,
+	resumeInterruptedChild,
 	settleRejectedCreateSubtaskAction,
 	type HistoryItemStatus,
 	VALID_TASK_STATUS_TRANSITIONS,

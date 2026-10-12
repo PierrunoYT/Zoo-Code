@@ -3938,41 +3938,39 @@ export class ClineProvider
 		})
 
 		// 5) Persist parent delegation metadata BEFORE the child starts writing.
-		//    atomicReadAndUpdate reads from the in-memory cache and writes back within a
-		//    single lock acquisition — no concurrent writer can slip between the read and
-		//    write, and the pure updater cannot re-enter the lock (no deadlock).
-		//    Broadcast and cache invalidation happen outside the lock after it releases.
+		//    atomicUpdateParentDelegation reads the on-disk parent record and
+		//    writes back within a single parent-file lock acquisition. The
+		//    builder runs inside that lock, so no host can change the parent or
+		//    its awaited child between validation and commit. Broadcast and
+		//    cache invalidation happen outside the lock after it releases.
 		//
 		//    If the parent is already "delegated" to a previous interrupted child (the user
 		//    navigated back to the parent and continued working), we implicitly sever the old
 		//    link here (delegated → active → delegated) so no explicit Abandon step is needed.
-		//    The old awaited child's status is re-read INSIDE the updater (which runs
-		//    synchronously under the store lock) so a concurrent abandon or completion cannot
-		//    slip between the status snapshot and the write. An active child must never be
+		//    The store re-reads the old awaited child's status from disk INSIDE the
+		//    lock, so a concurrent resume, abandon, or completion cannot slip between
+		//    the status snapshot and the write. An active child must never be
 		//    silently detached.
 		try {
-			await this.taskHistoryStore.atomicReadAndUpdate(parentTaskId, (historyItem) => {
-				if (pendingActionId && historyItem.pendingAction?.actionId !== pendingActionId) {
-					throw new Error(
-						`[delegateParentAndOpenChild] Pending action mismatch for parent ${parentTaskId}: expected ${pendingActionId}, found ${historyItem.pendingAction?.actionId}`,
-					)
-				}
-				const awaitedChildStatus = historyItem.awaitingChildId
-					? this.taskHistoryStore.get(historyItem.awaitingChildId)?.status
-					: undefined
-				const delegated = delegateTaskToChild(historyItem, child.taskId, awaitedChildStatus)
-				return {
-					...delegated,
-					pendingAction:
-						delegated.pendingAction?.actionId === pendingActionId ? undefined : delegated.pendingAction,
-				}
-			})
+			const updatedItem = await this.taskHistoryStore.atomicUpdateParentDelegation(
+				parentTaskId,
+				(diskParent, awaitedChildDiskStatus) => {
+					if (pendingActionId && diskParent.pendingAction?.actionId !== pendingActionId) {
+						throw new Error(
+							`[delegateParentAndOpenChild] Pending action mismatch for parent ${parentTaskId}: expected ${pendingActionId}, found ${diskParent.pendingAction?.actionId}`,
+						)
+					}
+					const delegated = delegateTaskToChild(diskParent, child.taskId, awaitedChildDiskStatus)
+					return {
+						...delegated,
+						pendingAction:
+							delegated.pendingAction?.actionId === pendingActionId ? undefined : delegated.pendingAction,
+					}
+				},
+			)
 			this.recentTasksCache = undefined
-			if (this.isViewLaunched) {
-				const updatedItem = this.taskHistoryStore.get(parentTaskId)
-				if (updatedItem) {
-					await this.postMessageToWebview({ type: "taskHistoryItemUpdated", taskHistoryItem: updatedItem })
-				}
+			if (this.isViewLaunched && updatedItem) {
+				await this.postMessageToWebview({ type: "taskHistoryItemUpdated", taskHistoryItem: updatedItem })
 			}
 		} catch (err) {
 			this.log(

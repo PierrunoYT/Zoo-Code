@@ -7,6 +7,8 @@ import {
 	completeDelegatedChild,
 	delegateTaskToChild,
 	interruptDelegatedChild,
+	LifecycleTransitionError,
+	resumeInterruptedChild,
 	resumeInterruptedTask,
 	settleRejectedCreateSubtaskAction,
 } from "../src/core/task-persistence/taskLifecycle"
@@ -40,7 +42,16 @@ interface WitnessContext {
 const MAX_DEPTH = 13
 const MAX_STATES = 10_000
 const actionIds = ["action-1", "action-2"] as const
-const expectedActions = ["delegate", "interrupt", "resume", "complete", "abandon", "stage", "settle-rejected"] as const
+const expectedActions = [
+	"delegate",
+	"interrupt",
+	"resume",
+	"resume-stale",
+	"complete",
+	"abandon",
+	"stage",
+	"settle-rejected",
+] as const
 const semanticLandmarks = {
 	"interrupted-child-redelegation": (state: ModelState) =>
 		state.parent?.status === "delegated" &&
@@ -193,9 +204,22 @@ function transitions(state: ModelState): Transition[] {
 			(!parent.parentTaskId ||
 				(lineageParent?.status === "delegated" && lineageParent.awaitingChildId === parent.id))
 		if (resumeValid) {
+			const resumed =
+				lineageParent !== undefined
+					? resumeInterruptedChild(lineageParent, parent)
+					: resumeInterruptedTask(parent, undefined)
 			result.push({
 				name: `resume(${parentId})`,
-				next: replace(state, { ...resumeInterruptedTask(parent, parent.parentTaskId), modelWasResumed: true }),
+				next: replace(state, { ...resumed, modelWasResumed: true }),
+			})
+		} else if (parent.status === "interrupted" && parent.parentTaskId && lineageParent !== undefined) {
+			// Representative rejected event: the parent re-delegated elsewhere,
+			// so the store's parent-locked ownership check must reject the
+			// resume and leave every record unchanged.
+			assert.throws(() => resumeInterruptedChild(lineageParent, parent), LifecycleTransitionError)
+			result.push({
+				name: `resume-stale(${parentId})`,
+				next: state,
 			})
 		}
 	}
@@ -444,6 +468,10 @@ function runRepresentativeScenarios(): void {
 	assert.equal(resumedNested.awaitingChildId, "child-b")
 	const redelegated = delegateTaskToChild(delegated, "child-b", interruptedA.status)
 	assert.throws(() => completeDelegatedChild(redelegated, interruptedA, "stale"), /not delegated to child/)
+	// The parent-locked resume rejects a child whose parent re-delegated, and
+	// accepts the same child while the parent still awaits it.
+	assert.throws(() => resumeInterruptedChild(redelegated, interruptedA), /no longer awaits/)
+	assert.equal(resumeInterruptedChild(delegated, interruptedA).status, "active")
 
 	const abandoned = abandonDelegatedChild(delegated, interruptedA)
 	assert.throws(() => completeDelegatedChild(abandoned.parent, abandoned.child, "late"), /not delegated to child/)

@@ -5,12 +5,13 @@ import * as path from "path"
 import type { HistoryItem } from "@roo-code/types"
 
 import { TaskHistoryStore } from "../TaskHistoryStore"
+import { delegateTaskToChild, LifecycleTransitionError } from "../taskLifecycle"
 
 // Wrap the real fs/promises so a test can pause inside the per-file lock
 // while every call still runs against the real filesystem.
 vi.mock("fs/promises", async () => {
 	const actual = await vi.importActual<typeof import("fs/promises")>("fs/promises")
-	return { ...actual, readFile: vi.fn(actual.readFile) }
+	return { ...actual, readFile: vi.fn(actual.readFile), rename: vi.fn(actual.rename) }
 })
 
 type WriteTaskFile = (item: HistoryItem, delta?: Partial<HistoryItem>) => Promise<HistoryItem>
@@ -96,6 +97,7 @@ describe("TaskHistoryStore real cross-host locking", () => {
 		const store = new TaskHistoryStore(storagePath)
 		try {
 			await store.initialize()
+			await expect(store.resumeInterruptedTask("missing")).rejects.toThrow(LifecycleTransitionError)
 			await expect(store.resumeInterruptedTask("missing")).rejects.toThrow("task missing not found in cache")
 			expect(store.get("missing")).toBeUndefined()
 			await expect(
@@ -122,9 +124,9 @@ describe("TaskHistoryStore real cross-host locking", () => {
 						: JSON.stringify(scenario === "schema" ? { id: "child" } : item("other"))
 				if (scenario === "missing") await fs.unlink(filePath)
 				else await fs.writeFile(filePath, contents)
-				await expect(store.resumeInterruptedTask("child")).rejects.toThrow(
-					"task child has no valid disk record",
-				)
+				const rejection = store.resumeInterruptedTask("child")
+				await expect(rejection).rejects.toThrow(LifecycleTransitionError)
+				await expect(rejection).rejects.toThrow("task child has no valid disk record")
 				expect(store.get("child")).toBeUndefined()
 				expect(store["taskFileMtimes"].has("child")).toBe(false)
 				if (scenario === "missing") await expect(fs.access(filePath)).rejects.toMatchObject({ code: "ENOENT" })
@@ -180,6 +182,192 @@ describe("TaskHistoryStore real cross-host locking", () => {
 		} finally {
 			storeA.dispose()
 			storeB.dispose()
+			await fs.rm(storagePath, { recursive: true, force: true })
+		}
+	})
+
+	it("rejects resume after a competing host re-delegates the parent", async () => {
+		const storagePath = await fs.mkdtemp(path.join(os.tmpdir(), "resume-redelegated-parent-"))
+		const storeA = new TaskHistoryStore(storagePath)
+		const storeB = new TaskHistoryStore(storagePath)
+		const parent = {
+			...item("parent"),
+			status: "delegated" as const,
+			awaitingChildId: "child",
+			delegatedToId: "child",
+			childIds: ["child"],
+		}
+		const child = { ...item("child"), status: "interrupted" as const, parentTaskId: "parent", rootTaskId: "parent" }
+
+		try {
+			await storeA.initialize()
+			await storeA.upsert(parent)
+			await storeA.upsert(child)
+			await storeB.initialize()
+
+			await storeB.atomicUpdateParentDelegation("parent", (diskParent, awaitedChildDiskStatus) =>
+				delegateTaskToChild(diskParent, "child-b", awaitedChildDiskStatus),
+			)
+
+			await expect(storeA.resumeInterruptedTask("child", "parent")).rejects.toThrow(
+				"parent parent no longer awaits it",
+			)
+			await storeA.invalidate("child")
+			await storeA.invalidate("parent")
+			expect(storeA.get("child")?.status).toBe("interrupted")
+			expect(storeA.get("parent")).toMatchObject({ status: "delegated", awaitingChildId: "child-b" })
+		} finally {
+			storeA.dispose()
+			storeB.dispose()
+			await fs.rm(storagePath, { recursive: true, force: true })
+		}
+	})
+
+	it("rejects re-delegation after a competing host resumed the awaited child", async () => {
+		const storagePath = await fs.mkdtemp(path.join(os.tmpdir(), "redelegation-resumed-child-"))
+		const storeA = new TaskHistoryStore(storagePath)
+		const storeB = new TaskHistoryStore(storagePath)
+		const parent = {
+			...item("parent"),
+			status: "delegated" as const,
+			awaitingChildId: "child",
+			delegatedToId: "child",
+			childIds: ["child"],
+		}
+		const child = { ...item("child"), status: "interrupted" as const, parentTaskId: "parent", rootTaskId: "parent" }
+
+		try {
+			await storeA.initialize()
+			await storeA.upsert(parent)
+			await storeA.upsert(child)
+			await storeB.initialize()
+
+			await storeA.resumeInterruptedTask("child", "parent")
+			expect(storeA.get("child")?.status).toBe("active")
+
+			await expect(
+				storeB.atomicUpdateParentDelegation("parent", (diskParent, awaitedChildDiskStatus) =>
+					delegateTaskToChild(diskParent, "child-b", awaitedChildDiskStatus),
+				),
+			).rejects.toThrow("not interrupted")
+
+			await storeB.invalidate("parent")
+			await storeB.invalidate("child")
+			expect(storeB.get("parent")).toMatchObject({ status: "delegated", awaitingChildId: "child" })
+			expect(storeB.get("child")?.status).toBe("active")
+		} finally {
+			storeA.dispose()
+			storeB.dispose()
+			await fs.rm(storagePath, { recursive: true, force: true })
+		}
+	})
+
+	it("reads the awaited child's disk record at lock time even when the cache is stale", async () => {
+		const storagePath = await fs.mkdtemp(path.join(os.tmpdir(), "redelegation-stale-cache-"))
+		const storeA = new TaskHistoryStore(storagePath)
+		const storeB = new TaskHistoryStore(storagePath)
+		const parent = {
+			...item("parent"),
+			status: "delegated" as const,
+			awaitingChildId: "child",
+			delegatedToId: "child",
+			childIds: ["child"],
+		}
+		const child = { ...item("child"), status: "interrupted" as const, parentTaskId: "parent", rootTaskId: "parent" }
+
+		try {
+			await storeA.initialize()
+			await storeA.upsert(parent)
+			await storeA.upsert(child)
+			// storeB's cache captures the pre-resume state and never refreshes.
+			await storeB.initialize()
+			expect(storeB.get("child")?.status).toBe("interrupted")
+
+			await storeA.resumeInterruptedTask("child", "parent")
+
+			await expect(
+				storeB.atomicUpdateParentDelegation("parent", (diskParent, awaitedChildDiskStatus) =>
+					delegateTaskToChild(diskParent, "child-b", awaitedChildDiskStatus),
+				),
+			).rejects.toThrow("not interrupted")
+
+			await storeB.invalidate("parent")
+			expect(storeB.get("parent")).toMatchObject({ status: "delegated", awaitingChildId: "child" })
+		} finally {
+			storeA.dispose()
+			storeB.dispose()
+			await fs.rm(storagePath, { recursive: true, force: true })
+		}
+	})
+
+	it("commits a first delegation through the same lock-held parent write", async () => {
+		const storagePath = await fs.mkdtemp(path.join(os.tmpdir(), "delegation-first-lock-"))
+		const storeA = new TaskHistoryStore(storagePath)
+		const storeB = new TaskHistoryStore(storagePath)
+
+		try {
+			await storeA.initialize()
+			await storeA.upsert(item("parent"))
+			await storeB.initialize()
+
+			await storeB.atomicUpdateParentDelegation("parent", (diskParent) =>
+				delegateTaskToChild(diskParent, "child-b", undefined),
+			)
+
+			await storeA.invalidate("parent")
+			expect(storeA.get("parent")).toMatchObject({
+				status: "delegated",
+				awaitingChildId: "child-b",
+				delegatedToId: "child-b",
+				childIds: ["child-b"],
+			})
+		} finally {
+			storeA.dispose()
+			storeB.dispose()
+			await fs.rm(storagePath, { recursive: true, force: true })
+		}
+	})
+
+	it("keeps the prior task record recoverable when resume persistence fails both renames", async () => {
+		const storagePath = await fs.mkdtemp(path.join(os.tmpdir(), "resume-partial-failure-"))
+		const store = new TaskHistoryStore(storagePath)
+		const taskDir = path.join(storagePath, "tasks", "child")
+		const renameMock = vi.mocked(fs.rename)
+		const originalRename = renameMock.getMockImplementation()
+
+		try {
+			await store.initialize()
+			await store.upsert({ ...item("child"), status: "interrupted" })
+
+			let renameCall = 0
+			renameMock.mockImplementation(async (oldPath, newPath) => {
+				renameCall++
+				if (renameCall === 2) throw new Error("Primary rename failed")
+				if (renameCall === 3) throw new Error("Rollback rename failed")
+				return originalRename
+					? originalRename(oldPath, newPath)
+					: (fs.rename as unknown as typeof import("fs/promises").rename)(oldPath, newPath)
+			})
+
+			await expect(store.resumeInterruptedTask("child")).rejects.toThrow("Primary rename failed")
+
+			// The commit rename removed the target and the rollback rename
+			// failed. The surviving backup holds the only copy of the prior
+			// interrupted record. The store kept that record in its cache.
+			const files = await fs.readdir(taskDir)
+			const backupName = files.find((name) => name.includes(".bak_"))
+			expect(backupName).toBeDefined()
+			const backupRecord = JSON.parse(await fs.readFile(path.join(taskDir, backupName!), "utf8"))
+			expect(backupRecord).toMatchObject({ id: "child", status: "interrupted" })
+			expect(store.get("child")?.status).toBe("interrupted")
+
+			// Recovery: restore the backup and the record is readable again.
+			await fs.rename(path.join(taskDir, backupName!), path.join(taskDir, "history_item.json"))
+			await store.invalidate("child")
+			expect(store.get("child")).toMatchObject({ id: "child", status: "interrupted" })
+		} finally {
+			if (originalRename) renameMock.mockImplementation(originalRename)
+			store.dispose()
 			await fs.rm(storagePath, { recursive: true, force: true })
 		}
 	})

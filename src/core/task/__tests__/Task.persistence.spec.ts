@@ -1227,6 +1227,54 @@ describe("Task persistence", () => {
 			},
 		)
 
+		it.each(["noButtonClicked", "unexpected"])(
+			"does not resume a completed task after a declined %s resume_completed_task response",
+			async (response) => {
+				const task = new Task({
+					provider: mockProvider,
+					apiConfiguration: mockApiConfig,
+					startTask: false,
+					initialStatus: "completed",
+				})
+				const answer: Awaited<ReturnType<Task["ask"]>> = { response: "noButtonClicked" }
+				// Model an unvalidated response arriving across the webview boundary.
+				Reflect.set(answer, "response", response)
+				vi.spyOn(task, "ask").mockResolvedValue(answer)
+				const loop = vi.spyOn(getTaskPersistenceAccess(task), "initiateTaskLoop").mockResolvedValue(undefined)
+				await task["resumeTaskFromHistory"]()
+
+				expect(task.ask).toHaveBeenCalledWith("resume_completed_task")
+				expect(mockProvider.resumeInterruptedTask).not.toHaveBeenCalled()
+				expect(mockProvider.updateTaskHistory).not.toHaveBeenCalled()
+				expect(loop).not.toHaveBeenCalled()
+			},
+		)
+
+		it("resumes an accepted completed task through the task loop without a store transition", async () => {
+			mockReadTaskMessages.mockResolvedValue([
+				{ ts: 1, type: "say" as const, say: "text" as const, text: "Original task" },
+			])
+			mockReadApiMessages.mockResolvedValue([
+				{ role: "user", content: [{ type: "text", text: "Original task" }] },
+			])
+			const task = new Task({
+				provider: mockProvider,
+				apiConfiguration: mockApiConfig,
+				startTask: false,
+				initialStatus: "completed",
+			})
+			vi.spyOn(task, "ask").mockResolvedValue({ response: "yesButtonClicked" })
+			const loop = vi.spyOn(getTaskPersistenceAccess(task), "initiateTaskLoop").mockResolvedValue(undefined)
+			await task["resumeTaskFromHistory"]()
+
+			expect(task.ask).toHaveBeenCalledWith("resume_completed_task")
+			expect(loop).toHaveBeenCalledTimes(1)
+			// Non-interrupted semantics: an accepted completed-task resume never
+			// moves the store record or calls the interrupted-resume path.
+			expect(mockProvider.resumeInterruptedTask).not.toHaveBeenCalled()
+			expect(mockProvider.updateTaskHistory).not.toHaveBeenCalled()
+		})
+
 		it("does not restore stale lineage through repeated message saves after rejected resume", async () => {
 			const history = {
 				id: "detached",
