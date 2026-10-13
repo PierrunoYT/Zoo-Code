@@ -633,6 +633,14 @@ export class ClineProvider
 				`[cleanupFailedHistoryTask] dispose() failed for ${task.taskId}.${task.instanceId}: ${error instanceof Error ? error.message : String(error)}`,
 			)
 		}
+
+		if (error instanceof LifecycleTransitionError) {
+			void vscode.window.showErrorMessage(error.message)
+		}
+
+		// The registry already dropped the task. Post fresh state so the webview
+		// stops showing the removed task after a rejected resume or settlement.
+		await this.postStateToWebview()
 	}
 
 	/**
@@ -3121,12 +3129,20 @@ export class ClineProvider
 	 *
 	 * @param item The history item to update or add
 	 * @param options.broadcast Whether to broadcast the updated history to the webview (default: true)
+	 * @param options.preserveLineage When true, the item's parent and root links are not
+	 * authoritative: the on-disk lineage is kept as is and stale in-memory links are never
+	 * written or resurrected. Use only for message saves from rehydrated interrupted tasks.
 	 * @returns The updated task history array
 	 */
-	async updateTaskHistory(item: HistoryItem, options: { broadcast?: boolean } = {}): Promise<HistoryItem[]> {
-		const { broadcast = true } = options
+	async updateTaskHistory(
+		item: HistoryItem,
+		options: { broadcast?: boolean; preserveLineage?: boolean } = {},
+	): Promise<HistoryItem[]> {
+		const { broadcast = true, preserveLineage = false } = options
 
-		const history = await this.taskHistoryStore.upsert(item)
+		const history = preserveLineage
+			? await this.taskHistoryStore.upsertPreservingLineage(item)
+			: await this.taskHistoryStore.upsert(item)
 		this.recentTasksCache = undefined
 
 		// Broadcast the updated history to the webview if requested.

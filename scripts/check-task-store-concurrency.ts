@@ -23,6 +23,7 @@ type OperationId =
 	| "complete-a"
 	| "redelegate-b"
 	| "stale-save-a"
+	| "preserve-save-a"
 	| "abandon-b"
 	| "reject-a"
 type RecordMap = Partial<Record<TaskId, HistoryItem>>
@@ -231,6 +232,23 @@ const operationSpecs: Record<OperationId, OperationSpec> = {
 		buildWrites: (snapshot) => {
 			const stale = getRequired(snapshot, "child-a")
 			return [{ ...stale, tokensOut: stale.tokensOut + 1 }]
+		},
+	},
+	"preserve-save-a": {
+		id: "preserve-save-a",
+		host: "A",
+		externalSnapshot: true,
+		allowRefreshAfterRead: true,
+		buildWrites: (snapshot) => {
+			const stale = getRequired(snapshot, "child-a")
+			// A rehydrated interrupted task's message save declares its
+			// in-memory lineage non-authoritative. The preserve-lineage
+			// write owner strips parent and root links from the payload
+			// and delta before anything is written.
+			const stripped: HistoryItem = { ...stale, tokensOut: stale.tokensOut + 1 }
+			delete stripped.parentTaskId
+			delete stripped.rootTaskId
+			return [stripped]
 		},
 	},
 	"abandon-b": {
@@ -680,6 +698,34 @@ const scenarios: Scenario[] = [
 			],
 		},
 		check: () => [],
+	},
+	{
+		name: "preserve save keeps detachment",
+		operations: [operationSpecs["preserve-save-a"], operationSpecs["abandon-b"]],
+		check: (state) => {
+			// Monotonic detachment for the preserve-lineage write owner:
+			// once the detach commit lands, no preserve-save commit may
+			// reintroduce the child's parent or root links.
+			for (const commit of state.commits) {
+				if (commit.operationId !== "preserve-save-a" || commit.taskId !== "child-a" || !commit.previous) {
+					continue
+				}
+				if (commit.previous.parentTaskId === undefined && commit.next.parentTaskId !== undefined) {
+					return ["preserve-lineage save restored a detached parent link"]
+				}
+				if (commit.previous.rootTaskId === undefined && commit.next.rootTaskId !== undefined) {
+					return ["preserve-lineage save restored a detached root link"]
+				}
+			}
+			if (state.operations["abandon-b"]?.phase === "done") {
+				const disk = state.disk["child-a"]
+				if (!disk) return ["preserve save dropped the detached child record"]
+				if (disk.parentTaskId !== undefined || disk.rootTaskId !== undefined) {
+					return ["preserve-lineage save left reattached lineage after abandonment"]
+				}
+			}
+			return []
+		},
 	},
 ]
 

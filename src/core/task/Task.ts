@@ -1799,13 +1799,17 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 
 			const provider = this.providerRef.deref()
 			const existingStatus = provider?.taskHistoryStore.get(this.taskId)?.status
+			const persistedHistoryItem = existingStatus ? { ...historyItem, status: existingStatus } : historyItem
 			if (this.initialStatus === "interrupted") {
 				// A rehydrated task's links may have been severed by another host.
-				// Only lifecycle operations own lineage after interruption, not message saves.
-				delete historyItem.parentTaskId
-				delete historyItem.rootTaskId
+				// Only lifecycle operations own lineage after interruption, not
+				// message saves. The in-memory links stay out of the write: the
+				// store preserves the on-disk lineage and never resurrects the
+				// stale links, even when the disk record was deleted.
+				await provider?.updateTaskHistory(persistedHistoryItem, { preserveLineage: true })
+			} else {
+				await provider?.updateTaskHistory(persistedHistoryItem)
 			}
-			await provider?.updateTaskHistory(existingStatus ? { ...historyItem, status: existingStatus } : historyItem)
 		} catch (error) {
 			// The message array was persisted above; a metadata or task-history failure must
 			// not mask that write (see the method docs). The next saveClineMessages() call

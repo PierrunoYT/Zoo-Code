@@ -1103,6 +1103,8 @@ describe("Task persistence", () => {
 					status: "completed",
 					tokensIn: 10,
 				}),
+				// The interrupted rehydrated task declares its lineage non-authoritative.
+				{ preserveLineage: true },
 			)
 		})
 	})
@@ -1308,10 +1310,11 @@ describe("Task persistence", () => {
 			await task["saveClineMessages"]()
 			await task["saveClineMessages"]()
 			expect(loop).not.toHaveBeenCalled()
-			expect(mockProvider.updateTaskHistory).toHaveBeenCalled()
-			for (const [saved] of vi.mocked(mockProvider.updateTaskHistory).mock.calls) {
-				expect(saved).not.toHaveProperty("parentTaskId")
-				expect(saved).not.toHaveProperty("rootTaskId")
+			expect(mockProvider.updateTaskHistory).toHaveBeenCalledTimes(2)
+			for (const [saved, options] of vi.mocked(mockProvider.updateTaskHistory).mock.calls) {
+				// The stale rehydrated links must be declared non-authoritative so
+				// the store keeps the persisted lineage and never restores these.
+				expect(options).toEqual({ preserveLineage: true })
 				expect(saved.status).toBe("interrupted")
 			}
 		})

@@ -32,6 +32,18 @@ function mergeWithDisk(delta: Partial<HistoryItem>): (existing: unknown, incomin
 }
 
 /**
+ * Copy a history item without its parent and root links. A preserve-lineage
+ * write persists this copy, so the write carries no lineage in its delta or
+ * payload and cannot overwrite or resurrect the authoritative disk links.
+ */
+function withoutLineage(item: HistoryItem): HistoryItem {
+	const copy: HistoryItem = { ...item }
+	delete copy.parentTaskId
+	delete copy.rootTaskId
+	return copy
+}
+
+/**
  * Durable intent for the one repair that spans an active delegated child and
  * its parent. Task files remain authoritative; this file only records the
  * guarded target transition that must be completed after a crash.
@@ -204,6 +216,20 @@ export class TaskHistoryStore {
 	}
 
 	/**
+	 * Insert or update a history item whose parent and root links are not
+	 * authoritative. Message saves from rehydrated interrupted tasks use
+	 * this: the in-memory lineage may be stale after another host detached
+	 * or deleted the record. The write never carries lineage into the delta
+	 * or the written payload, so the locked disk state stays authoritative.
+	 * A linked record keeps its links, a detached record stays detached, and
+	 * a deleted record is recreated without links. Lifecycle operations that
+	 * legitimately set lineage must use `upsert` instead.
+	 */
+	async upsertPreservingLineage(item: HistoryItem): Promise<HistoryItem[]> {
+		return this.withLock(() => this.upsertCore(item, { preserveLineage: true }))
+	}
+
+	/**
 	 * Core upsert logic — must only be called from within `withLock`.
 	 *
 	 * Enforces state-machine transition rules when `item.status` changes.
@@ -212,44 +238,52 @@ export class TaskHistoryStore {
 	 */
 	private async upsertCore(
 		item: HistoryItem,
-		options: { skipTransitionCheck?: boolean } = {},
+		options: { skipTransitionCheck?: boolean; preserveLineage?: boolean } = {},
 	): Promise<HistoryItem[]> {
-		const existing = this.cache.get(item.id)
+		// A preserve-lineage write owns no lineage. Strip the links before the
+		// cache merge and the delta are built, so omission can neither retain
+		// stale cached links in the written payload nor resurrect them when
+		// the disk record is missing or unparseable.
+		const incoming = options.preserveLineage ? withoutLineage(item) : item
+		const existing = this.cache.get(incoming.id)
 
 		// Enforce transition validity at the write boundary so that any caller
 		// (including fire-and-forget saves) cannot silently stomp a terminal status.
 		// Skip when there is no existing record — first insert has no prior state to transition from.
 		// Normalize existing.status (undefined = legacy "active") before comparing so that writing
 		// status: "active" onto a legacy item without a status field is not treated as a transition.
-		if (!options.skipTransitionCheck && existing && item.status !== undefined) {
+		if (!options.skipTransitionCheck && existing && incoming.status !== undefined) {
 			const normalizedExisting: HistoryItemStatus = existing.status ?? "active"
-			if (item.status !== normalizedExisting) {
+			if (incoming.status !== normalizedExisting) {
 				try {
-					assertValidTransition(existing.status, item.status)
+					assertValidTransition(existing.status, incoming.status)
 				} catch (cacheError) {
 					// Cache may be stale from a peer write. Re-read disk
 					// under the store lock before rejecting the transition.
-					const diskItem = await this.readTaskFile(item.id)
+					const diskItem = await this.readTaskFile(incoming.id)
 					if (!diskItem) {
 						throw cacheError
 					}
-					assertValidTransition(diskItem.status, item.status)
+					assertValidTransition(diskItem.status, incoming.status)
 				}
 			}
 		}
 
-		// Merge: preserve existing metadata unless explicitly overwritten
-		const merged = existing ? { ...existing, ...item } : item
+		// Merge: preserve existing metadata unless explicitly overwritten.
+		// A preserve-lineage write also owns no cached lineage: the merged
+		// payload keeps no links, so a missing or unparseable disk record is
+		// written without them instead of resurrecting stale cached links.
+		const merged = existing && !options.preserveLineage ? { ...existing, ...incoming } : incoming
 
-		const delta = existing ? this.buildDelta(item.id, existing, item) : { ...item }
+		const delta = existing ? this.buildDelta(incoming.id, existing, incoming) : { ...incoming }
 		let written: HistoryItem
 		try {
 			written = await this.writeTaskFile(merged, delta)
 		} catch (error) {
 			if (error instanceof DeltaRejectedError) {
-				const diskItem = await this.readTaskFile(item.id)
+				const diskItem = await this.readTaskFile(incoming.id)
 				if (diskItem) {
-					this.cache.set(item.id, diskItem)
+					this.cache.set(incoming.id, diskItem)
 				}
 				throw error
 			}

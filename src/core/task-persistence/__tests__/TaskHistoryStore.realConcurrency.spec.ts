@@ -743,4 +743,124 @@ describe("TaskHistoryStore real cross-host locking", () => {
 			await fs.rm(storagePath, { recursive: true, force: true })
 		}
 	})
+
+	describe("upsertPreservingLineage", () => {
+		const detachedItem = (id: string): HistoryItem => {
+			const record = { ...item(id), status: "interrupted" as const }
+			delete (record as Partial<HistoryItem>).parentTaskId
+			delete (record as Partial<HistoryItem>).rootTaskId
+			return record
+		}
+
+		it("keeps a linked record linked through a stale message save", async () => {
+			const storagePath = await fs.mkdtemp(path.join(os.tmpdir(), "preserve-lineage-linked-"))
+			const store = new TaskHistoryStore(storagePath)
+			const filePath = path.join(storagePath, "tasks", "child", "history_item.json")
+
+			try {
+				await store.initialize()
+				await store.upsert({
+					...item("child"),
+					status: "interrupted",
+					parentTaskId: "parent",
+					rootTaskId: "root",
+				})
+
+				// A rehydrated task saves messages without holding lineage
+				// authority, and another host has refreshed nothing here.
+				const staleSave: HistoryItem = {
+					...item("child"),
+					status: "interrupted",
+					task: "Updated",
+					tokensOut: 7,
+				}
+				await expect(store.upsertPreservingLineage(staleSave)).resolves.toBeDefined()
+
+				const persisted = JSON.parse(await fs.readFile(filePath, "utf8"))
+				expect(persisted.parentTaskId).toBe("parent")
+				expect(persisted.rootTaskId).toBe("root")
+				expect(persisted.task).toBe("Updated")
+				expect(store.get("child")).toMatchObject({ parentTaskId: "parent", rootTaskId: "root" })
+			} finally {
+				store.dispose()
+				await fs.rm(storagePath, { recursive: true, force: true })
+			}
+		})
+
+		it("keeps a detached record detached when the local cache still holds stale links", async () => {
+			const storagePath = await fs.mkdtemp(path.join(os.tmpdir(), "preserve-lineage-detached-"))
+			const store = new TaskHistoryStore(storagePath)
+			const filePath = path.join(storagePath, "tasks", "child", "history_item.json")
+
+			try {
+				await store.initialize()
+				await store.upsert({
+					...item("child"),
+					status: "interrupted",
+					parentTaskId: "parent",
+					rootTaskId: "root",
+				})
+
+				// Another host detaches the record directly on disk; this
+				// host's cache still shows the removed links.
+				await fs.writeFile(filePath, JSON.stringify(detachedItem("child")), "utf8")
+
+				const staleSave: HistoryItem = {
+					...item("child"),
+					status: "interrupted",
+					task: "Updated",
+					parentTaskId: "parent",
+					rootTaskId: "root",
+				}
+				await store.upsertPreservingLineage(staleSave)
+
+				const persisted = JSON.parse(await fs.readFile(filePath, "utf8"))
+				expect(persisted).not.toHaveProperty("parentTaskId")
+				expect(persisted).not.toHaveProperty("rootTaskId")
+				expect(persisted.task).toBe("Updated")
+				expect(store.get("child")).not.toHaveProperty("parentTaskId")
+			} finally {
+				store.dispose()
+				await fs.rm(storagePath, { recursive: true, force: true })
+			}
+		})
+
+		it("recreates a deleted record without lineage when a stale save writes it", async () => {
+			const storagePath = await fs.mkdtemp(path.join(os.tmpdir(), "preserve-lineage-deleted-"))
+			const store = new TaskHistoryStore(storagePath)
+			const filePath = path.join(storagePath, "tasks", "child", "history_item.json")
+
+			try {
+				await store.initialize()
+				await store.upsert({
+					...item("child"),
+					status: "interrupted",
+					parentTaskId: "parent",
+					rootTaskId: "root",
+				})
+
+				// Another host removed the whole task record; the local
+				// cache still holds the linked item.
+				await fs.rm(path.dirname(filePath), { recursive: true, force: true })
+
+				const staleSave: HistoryItem = {
+					...item("child"),
+					status: "interrupted",
+					task: "Updated",
+					parentTaskId: "parent",
+					rootTaskId: "root",
+				}
+				await store.upsertPreservingLineage(staleSave)
+
+				const persisted = JSON.parse(await fs.readFile(filePath, "utf8"))
+				expect(persisted).not.toHaveProperty("parentTaskId")
+				expect(persisted).not.toHaveProperty("rootTaskId")
+				expect(persisted.status).toBe("interrupted")
+				expect(store.get("child")).not.toHaveProperty("parentTaskId")
+			} finally {
+				store.dispose()
+				await fs.rm(storagePath, { recursive: true, force: true })
+			}
+		})
+	})
 })
