@@ -5,7 +5,7 @@ import * as path from "path"
 import type { HistoryItem } from "@roo-code/types"
 
 import { TaskHistoryStore } from "../TaskHistoryStore"
-import { delegateTaskToChild, LifecycleTransitionError } from "../taskLifecycle"
+import { abandonDelegatedChild, delegateTaskToChild, LifecycleTransitionError } from "../taskLifecycle"
 
 // Wrap the real fs/promises so a test can pause inside the per-file lock
 // while every call still runs against the real filesystem.
@@ -320,6 +320,65 @@ describe("TaskHistoryStore real cross-host locking", () => {
 				awaitingChildId: "child-b",
 				delegatedToId: "child-b",
 				childIds: ["child-b"],
+			})
+		} finally {
+			storeA.dispose()
+			storeB.dispose()
+			await fs.rm(storagePath, { recursive: true, force: true })
+		}
+	})
+
+	it("keeps the persisted delegation when a stale cached parent already shows the new status", async () => {
+		const storagePath = await fs.mkdtemp(path.join(os.tmpdir(), "delegation-stale-status-delta-"))
+		const storeA = new TaskHistoryStore(storagePath)
+		const storeB = new TaskHistoryStore(storagePath)
+		const parent = {
+			...item("parent"),
+			status: "delegated" as const,
+			awaitingChildId: "child",
+			delegatedToId: "child",
+			childIds: ["child"],
+		}
+		const child = { ...item("child"), status: "interrupted" as const, parentTaskId: "parent", rootTaskId: "parent" }
+
+		try {
+			await storeA.initialize()
+			await storeA.upsert(parent)
+			await storeA.upsert(child)
+			// storeB caches the delegated parent and never refreshes it.
+			await storeB.initialize()
+			expect(storeB.get("parent")).toMatchObject({ status: "delegated", awaitingChildId: "child" })
+
+			// Another host abandons the awaited child, so the disk parent
+			// becomes active with no delegation pointers.
+			const abandonedParent = storeA.get("parent")
+			const abandonedChild = storeA.get("child")
+			if (!abandonedParent || !abandonedChild) {
+				throw new Error("abandon setup records are missing from store A")
+			}
+			await storeA.atomicUpdatePair(
+				"child",
+				"parent",
+				(childRecord) => abandonDelegatedChild(abandonedParent, childRecord).child,
+				(parentRecord) => abandonDelegatedChild(parentRecord, abandonedChild).parent,
+			)
+			await storeA.invalidate("parent")
+			const parentAfterAbandon = storeA.get("parent")
+			expect(parentAfterAbandon?.status).toBe("active")
+			expect(parentAfterAbandon?.awaitingChildId).toBeUndefined()
+
+			// storeB re-delegates from its stale cache. The builder runs on the
+			// disk parent (active), but the cached parent already shows the new
+			// status, so the delta must be computed against the disk record.
+			await storeB.atomicUpdateParentDelegation("parent", (diskParent, awaitedChildDiskStatus) =>
+				delegateTaskToChild(diskParent, "child-b", awaitedChildDiskStatus),
+			)
+
+			await storeB.invalidate("parent")
+			expect(storeB.get("parent")).toMatchObject({
+				status: "delegated",
+				awaitingChildId: "child-b",
+				delegatedToId: "child-b",
 			})
 		} finally {
 			storeA.dispose()

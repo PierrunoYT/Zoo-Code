@@ -1213,7 +1213,11 @@ export class TaskHistoryStore {
 					)
 				}
 
-				const delta = this.buildDelta(parentTaskId, cached, next)
+				// Diff against the locked disk record, not the stale cache: a
+				// field whose new value equals the stale cached value would
+				// otherwise be dropped from the delta, and mergeHistoryDelta
+				// would keep the disk value for it.
+				const delta = this.buildDelta(parentTaskId, diskParent, next)
 				const merged = mergeHistoryDelta(diskParent, next, delta)
 				await safeWriteJson(parentFilePath, merged, { assumeLockHeld: true })
 

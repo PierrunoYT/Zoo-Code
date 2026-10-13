@@ -111,6 +111,16 @@ describe("task lifecycle transitions", () => {
 		expect(() => resumeInterruptedChild(activeParent, child)).toThrow(/no longer awaits/)
 	})
 
+	it("rejects the parent-locked resume when an active parent retains a stale awaited pointer", () => {
+		// Completion accepts an active parent with a surviving awaited pointer.
+		// The status check must reject the resume on its own, without help from
+		// the awaited-pointer check.
+		const activeParent = item("parent", { awaitingChildId: "child", delegatedToId: "child" })
+		const child = item("child", { status: "interrupted", parentTaskId: "parent" })
+
+		expect(() => resumeInterruptedChild(activeParent, child)).toThrow(/no longer awaits/)
+	})
+
 	it("interrupts a child without clearing the parent's ownership", () => {
 		const parent = item("parent", { status: "delegated", awaitingChildId: "child", delegatedToId: "child" })
 		const child = item("child", { parentTaskId: "parent" })
