@@ -141,7 +141,12 @@ function makeLinkedInterruptedHistory(id: string): HistoryItem {
 }
 
 function makeMessages(): ClineMessage[] {
-	return [{ ts: 1, type: "say", say: "text", text: "Rehydrated child progress" }]
+	// The first rehydrated message is the original task say. Its text feeds
+	// the metadata title, so it must match the persisted child title.
+	return [
+		{ ts: 1, type: "say", say: "text", text: "Delegated child" },
+		{ ts: 2, type: "say", say: "text", text: "Rehydrated child progress" },
+	]
 }
 
 async function readPersistedRecord(storagePath: string, taskId: string): Promise<Record<string, unknown>> {
@@ -211,7 +216,7 @@ describe("Task.saveClineMessages lineage ownership for rehydrated interrupted ta
 	})
 
 	async function createRehydratedTask(history: HistoryItem): Promise<Task> {
-		return new Task({
+		const task = new Task({
 			provider,
 			apiConfiguration: {
 				apiProvider: providerIdentifiers.anthropic,
@@ -221,6 +226,11 @@ describe("Task.saveClineMessages lineage ownership for rehydrated interrupted ta
 			historyItem: history,
 			startTask: false,
 		})
+		// Hydrate the rehydrated messages without persisting them. The tested
+		// save then matches the production resume flow, where cline messages
+		// are hydrated before the first metadata save.
+		task.clineMessages = makeMessages()
+		return task
 	}
 
 	it("recreates a record deleted by another host without stale lineage", async () => {
@@ -238,6 +248,7 @@ describe("Task.saveClineMessages lineage ownership for rehydrated interrupted ta
 		expect(persisted).not.toHaveProperty("parentTaskId")
 		expect(persisted).not.toHaveProperty("rootTaskId")
 		expect(persisted.status).toBe("interrupted")
+		expect(persisted.task).toBe("Delegated child")
 		expect(provider.taskHistoryStore.get("detached-child")).not.toHaveProperty("parentTaskId")
 	})
 
@@ -262,6 +273,8 @@ describe("Task.saveClineMessages lineage ownership for rehydrated interrupted ta
 		const persisted = await readPersistedRecord(storagePath, "detached-child")
 		expect(persisted).not.toHaveProperty("parentTaskId")
 		expect(persisted).not.toHaveProperty("rootTaskId")
+		expect(persisted.status).toBe("interrupted")
+		expect(persisted.task).toBe("Delegated child")
 		expect(provider.taskHistoryStore.get("detached-child")).not.toHaveProperty("parentTaskId")
 	})
 
@@ -276,6 +289,7 @@ describe("Task.saveClineMessages lineage ownership for rehydrated interrupted ta
 		expect(persisted.parentTaskId).toBe("parent-1")
 		expect(persisted.rootTaskId).toBe("root-1")
 		expect(persisted.status).toBe("interrupted")
+		expect(persisted.task).toBe("Delegated child")
 		expect(provider.taskHistoryStore.get("linked-child")).toMatchObject({
 			parentTaskId: "parent-1",
 			rootTaskId: "root-1",

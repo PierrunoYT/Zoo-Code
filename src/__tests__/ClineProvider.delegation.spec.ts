@@ -108,8 +108,9 @@ describe("ClineProvider.resumeInterruptedTask()", () => {
 			await storeB.initialize()
 			const resume = storeA.resumeInterruptedTask.bind(storeA)
 			vi.spyOn(storeA, "resumeInterruptedTask").mockImplementationOnce(async (id, expectedParent) => {
-				// This hook runs after the provider's parent check. Commit only the
-				// first half of abandonment: the parent still appears to await this child.
+				// This hook runs after the provider's cache refresh but before the
+				// store's locked ownership check. Commit only the first half of
+				// abandonment: the parent still appears to await this child.
 				await storeB.atomicReadAndUpdate("child", (current) => abandonDelegatedChild(parent, current).child)
 				return resume(id, expectedParent)
 			})
@@ -130,17 +131,50 @@ describe("ClineProvider.resumeInterruptedTask()", () => {
 	})
 
 	it("rejects a stale interrupted child after its parent delegates elsewhere", async () => {
-		const taskHistoryStore = {
-			invalidate: vi.fn().mockResolvedValue(undefined),
-			get: vi.fn().mockReturnValue({ id: "parent-1", status: "delegated", awaitingChildId: "child-2" }),
-			resumeInterruptedTask: vi.fn(),
+		// The provider does not gate on an unlocked cache read. The store's
+		// parent-file-locked check rejects the stale child, so this flow uses
+		// a real store with a stale parent on disk.
+		const storagePath = await fs.mkdtemp(path.join(os.tmpdir(), "resume-stale-"))
+		const store = new TaskHistoryStore(storagePath)
+		const parent: HistoryItem = {
+			id: "parent",
+			number: 1,
+			ts: 1,
+			task: "Parent",
+			tokensIn: 0,
+			tokensOut: 0,
+			totalCost: 0,
+			status: "delegated",
+			awaitingChildId: "child-2",
+			delegatedToId: "child-2",
+			childIds: ["child", "child-2"],
 		}
-		const provider = makeProviderStub({ taskHistoryStore, isViewLaunched: false })
+		const child: HistoryItem = {
+			...parent,
+			id: "child",
+			status: "interrupted",
+			parentTaskId: "parent",
+			rootTaskId: "parent",
+			awaitingChildId: undefined,
+			delegatedToId: undefined,
+			childIds: [],
+		}
+		try {
+			await store.initialize()
+			await store.upsert(parent)
+			await store.upsert(child)
+			const provider = makeProviderStub({ taskHistoryStore: store, isViewLaunched: false })
 
-		await expect(
-			ClineProvider.prototype.resumeInterruptedTask.call(provider, "child-1", "parent-1"),
-		).rejects.toThrow("parent parent-1 no longer awaits it")
-		expect(taskHistoryStore.resumeInterruptedTask).not.toHaveBeenCalled()
+			await expect(
+				ClineProvider.prototype.resumeInterruptedTask.call(provider, "child", "parent"),
+			).rejects.toThrow("parent parent no longer awaits it")
+
+			// The stale child record stays untouched for recovery or abandonment.
+			expect(store.get("child")).toMatchObject({ status: "interrupted", parentTaskId: "parent" })
+		} finally {
+			store.dispose()
+			await fs.rm(storagePath, { recursive: true, force: true })
+		}
 	})
 
 	it("delegates a resumed interrupted child to a grandchild through the real provider flow", async () => {

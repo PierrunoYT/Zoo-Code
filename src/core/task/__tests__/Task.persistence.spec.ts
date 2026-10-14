@@ -1278,6 +1278,10 @@ describe("Task persistence", () => {
 		})
 
 		it("does not restore stale lineage through repeated message saves after rejected resume", async () => {
+			// The accepted resume completes its fallible api history preparation
+			// before the activation commit, so the harness must serve a readable
+			// api history for the rejection to come from the activation path.
+			mockReadApiMessages.mockResolvedValue([{ role: "user", content: "Continue" }])
 			const history = {
 				id: "detached",
 				number: 1,
@@ -1317,6 +1321,31 @@ describe("Task persistence", () => {
 				expect(options).toEqual({ preserveLineage: true })
 				expect(saved.status).toBe("interrupted")
 			}
+		})
+
+		it("keeps the interrupted record retryable when the api history read fails after acceptance", async () => {
+			// The first read hydrates the task. The second read runs after the
+			// user accepts, and the activation commit must wait for it. A failed
+			// read then leaves the record interrupted, so the user can retry.
+			mockReadTaskMessages.mockResolvedValue([])
+			mockReadApiMessages
+				.mockResolvedValueOnce([{ role: "user", content: "Continue" }])
+				.mockRejectedValueOnce(new Error("api history read failed"))
+			const task = new Task({
+				provider: mockProvider,
+				apiConfiguration: mockApiConfig,
+				startTask: false,
+				initialStatus: "interrupted",
+			})
+			mockProvider.taskHistoryStore.get = vi.fn().mockReturnValue({ id: task.taskId, status: "interrupted" })
+			vi.spyOn(task, "ask").mockResolvedValue({ response: "yesButtonClicked" })
+			const loop = vi.spyOn(getTaskPersistenceAccess(task), "initiateTaskLoop").mockResolvedValue(undefined)
+
+			await expect(task["resumeTaskFromHistory"]()).rejects.toThrow("api history read failed")
+
+			expect(mockProvider.resumeInterruptedTask).not.toHaveBeenCalled()
+			expect(mockProvider.updateTaskHistory).not.toHaveBeenCalled()
+			expect(loop).not.toHaveBeenCalled()
 		})
 
 		it("resumes a Task.create history task only once when run is also called", async () => {
@@ -1564,6 +1593,61 @@ describe("Task persistence", () => {
 				expect.arrayContaining([expect.objectContaining({ text: pendingAction.approvalText })]),
 			)
 			expect(mockSaveTaskMessages).not.toHaveBeenCalled()
+		})
+
+		it("activates an interrupted child before a denied pending-action replay starts the loop", async () => {
+			// A denied finish action still feeds the task loop. The record must
+			// leave interrupted through the authoritative resume before that
+			// loop starts, exactly as a generic accepted resume does.
+			mockReadTaskMessages.mockResolvedValue([
+				{ ts: 1, type: "say", say: "text", text: "Child" },
+				{ ts: 2, type: "ask", ask: "tool", text: pendingAction.approvalText },
+			])
+			mockReadApiMessages.mockResolvedValue([
+				{
+					role: "assistant",
+					content: [{ type: "tool_use", id: "finish-action", name: "attempt_completion", input: {} }],
+				},
+			])
+			// Restart settlement refreshes the record and re-reads the pending
+			// action from it, so the refreshed record must still carry the action.
+			mockProvider.taskHistoryStore.reconcile = vi.fn().mockResolvedValue(undefined)
+			mockProvider.taskHistoryStore.get = vi.fn().mockReturnValue({
+				id: "child-1",
+				status: "interrupted",
+				pendingAction,
+			})
+			const task = new Task({
+				provider: mockProvider,
+				apiConfiguration: mockApiConfig,
+				historyItem: {
+					id: "child-1",
+					number: 1,
+					ts: 1,
+					task: "Child",
+					tokensIn: 0,
+					tokensOut: 0,
+					totalCost: 0,
+					status: "interrupted",
+					parentTaskId: "parent-1",
+					pendingAction,
+				},
+				startTask: false,
+				initialStatus: "interrupted",
+			})
+			const activate = vi.fn<(taskId: string, parentTaskId?: string) => Promise<void>>()
+			activate.mockResolvedValue(undefined)
+			mockProvider.resumeInterruptedTask = activate
+			vi.spyOn(task, "ask").mockResolvedValue({ response: "noButtonClicked" })
+			const loop = vi.spyOn(getTaskPersistenceAccess(task), "initiateTaskLoop").mockResolvedValue(undefined)
+
+			await getTaskPersistenceAccess(task).resumeTaskFromHistory()
+
+			expect(task.ask).toHaveBeenCalledWith("tool", pendingAction.approvalText, false)
+			expect(activate).toHaveBeenCalledOnce()
+			expect(activate).toHaveBeenCalledWith("child-1", "parent-1")
+			expect(loop).toHaveBeenCalledOnce()
+			expect(activate.mock.invocationCallOrder[0]).toBeLessThan(loop.mock.invocationCallOrder[0])
 		})
 
 		it("replays a create-subtask action for an active historical task without restart settlement", async () => {

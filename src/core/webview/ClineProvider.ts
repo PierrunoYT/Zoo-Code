@@ -776,13 +776,12 @@ export class ClineProvider
 	public async resumeInterruptedTask(taskId: string, parentTaskId?: string): Promise<void> {
 		const resume = async () => {
 			if (parentTaskId) {
+				// A peer write holds the parent file during its rename. The
+				// unlocked cache read can then miss a valid parent and reject a
+				// resume the user already accepted. Do not gate here. The store
+				// re-reads the parent under the parent file lock, and that
+				// locked check alone decides the resume.
 				await this.taskHistoryStore.invalidate(parentTaskId)
-				const parent = this.taskHistoryStore.get(parentTaskId)
-				if (parent?.status !== "delegated" || parent.awaitingChildId !== taskId) {
-					throw new LifecycleTransitionError(
-						`Cannot resume task ${taskId}: parent ${parentTaskId} no longer awaits it`,
-					)
-				}
 			}
 
 			const resumed = await this.taskHistoryStore.resumeInterruptedTask(taskId, parentTaskId)

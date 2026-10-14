@@ -3239,13 +3239,6 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 			if (this.abort || this.abandoned || (response !== "yesButtonClicked" && response !== "messageResponse")) {
 				return
 			}
-			if (this.initialStatus === "interrupted") {
-				const provider = this.providerRef.deref()
-				if (!provider) {
-					throw new Error(`[Task#resumeTaskFromHistory] Provider unavailable for task ${this.taskId}`)
-				}
-				await provider.resumeInterruptedTask(this.taskId, this.parentTaskId)
-			}
 
 			let responseText: string | undefined
 			let responseImages: string[] | undefined
@@ -3257,7 +3250,9 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 			}
 
 			// Make sure that the api conversation history can be resumed by the API,
-			// even if it goes out of sync with cline messages.
+			// even if it goes out of sync with cline messages. This read and the
+			// derivation below are fallible. They run before the activation
+			// commit, so a failure leaves the record interrupted and retryable.
 			const existingApiConversationHistory: ApiMessage[] = await this.getSavedApiConversationHistory()
 
 			// Tool blocks are always preserved; native tool calling only.
@@ -3388,6 +3383,20 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 
 			await this.overwriteApiConversationHistory(modifiedApiConversationHistory)
 
+			// All fallible resume preparation is complete. Activate the
+			// interrupted record last, so a preparation failure never consumes
+			// the one interrupted → active resume.
+			if (this.abort || this.abandoned) {
+				return
+			}
+			if (this.initialStatus === "interrupted") {
+				const provider = this.providerRef.deref()
+				if (!provider) {
+					throw new Error(`[Task#resumeTaskFromHistory] Provider unavailable for task ${this.taskId}`)
+				}
+				await provider.resumeInterruptedTask(this.taskId, this.parentTaskId)
+			}
+
 			// Task resuming from history item.
 			await this.initiateTaskLoop(newUserContent)
 		} catch (error) {
@@ -3450,6 +3459,13 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 			}
 		} else if (text || images?.length) {
 			await this.say("user_feedback", text ?? "", images)
+		}
+
+		// A denied pending action still starts the task loop. Activate the
+		// interrupted record first, so the persisted status matches the running
+		// task. Approval paths above return early and run their own transitions.
+		if (this.initialStatus === "interrupted") {
+			await provider.resumeInterruptedTask(this.taskId, this.parentTaskId)
 		}
 
 		const deniedContent = text ? formatResponse.toolDeniedWithFeedback(text) : formatResponse.toolDenied()
