@@ -2,7 +2,14 @@ export {
 	type ApiMessage,
 	ApiMessagesReadError,
 	type ApiMessagesReadErrorKind,
+	createResumeHistoryRecoveryCopy,
+	getApiConversationHistoryFilePath,
 	readApiMessages,
+	removeResumeHistoryRecoveryCopy,
+	restoreApiMessagesIfUnchanged,
+	type ResumeHistoryRestoreOutcome,
+	type ResumeHistoryRestoreResult,
+	type ResumeRestoreStatusGate,
 	saveApiMessages,
 } from "./apiMessages"
 export {

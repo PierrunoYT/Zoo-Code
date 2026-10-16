@@ -833,6 +833,30 @@ export class TaskHistoryStore {
 		})
 	}
 
+	/**
+	 * Read one task's lifecycle status from its validated on-disk record inside
+	 * the record file's advisory lock. Throws `LifecycleTransitionError` when
+	 * the record is missing, malformed, or persisted under a different task ID,
+	 * so callers can fail closed instead of restoring over unknown disk state.
+	 * The cache is not consulted and not refreshed. Callers must not already
+	 * hold this record file's advisory lock.
+	 */
+	public async readValidatedDiskStatus(taskId: string): Promise<HistoryItemStatus> {
+		const filePath = await this.getTaskFilePath(taskId)
+		// A missing file cannot be locked, so the existence check runs first
+		// and maps the missing record to the same typed failure as the
+		// validated read below.
+		try {
+			await fs.stat(filePath)
+		} catch {
+			throw new LifecycleTransitionError(`[TaskHistoryStore] task ${taskId} has no valid disk record`)
+		}
+		return withFileLock(filePath, async () => {
+			const item = await this.readValidatedTaskFile(taskId)
+			return item.status ?? "active"
+		})
+	}
+
 	// ────────────────────────────── Migration ──────────────────────────────
 
 	/**

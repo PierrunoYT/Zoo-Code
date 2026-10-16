@@ -116,8 +116,12 @@ import { ClineProvider } from "../webview/ClineProvider"
 import { MultiSearchReplaceDiffStrategy } from "../diff/strategies/multi-search-replace"
 import {
 	type ApiMessage,
+	createResumeHistoryRecoveryCopy,
 	ensureMessageIdentifiers,
 	readApiMessages,
+	removeResumeHistoryRecoveryCopy,
+	restoreApiMessagesIfUnchanged,
+	type ResumeHistoryRestoreResult,
 	saveApiMessages,
 	readTaskMessages,
 	saveTaskMessages,
@@ -1489,12 +1493,18 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 	// For API requests, consecutive same-role messages are merged via mergeConsecutiveApiMessages()
 	// so rewind/edit behavior can still reference original message boundaries.
 
-	/** Replaces the entire API conversation history and persists the new state. */
-	async overwriteApiConversationHistory(newHistory: ApiMessage[], persist = true) {
+	/**
+	 * Replaces the entire API conversation history and persists the new state.
+	 * Returns false when the requested disk write failed. The in-memory
+	 * history always reflects `newHistory` after the call, so a caller that
+	 * must not keep an unpersisted rewrite restores it explicitly.
+	 */
+	async overwriteApiConversationHistory(newHistory: ApiMessage[], persist = true): Promise<boolean> {
 		this.hydrateApiConversationHistory(newHistory)
-		if (persist) {
-			await this.saveApiConversationHistory(false)
+		if (!persist) {
+			return true
 		}
+		return this.saveApiConversationHistory(false)
 	}
 
 	/**
@@ -3381,21 +3391,68 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 				})
 			}
 
-			await this.overwriteApiConversationHistory(modifiedApiConversationHistory)
+			// Preserve the authoritative history durably before the destructive
+			// preparation write, so a failed preparation or restore can never
+			// lose the original across a restart.
+			const recoveryCopyPath = await createResumeHistoryRecoveryCopy({
+				taskId: this.taskId,
+				globalStoragePath: this.globalStoragePath,
+				messages: existingApiConversationHistory,
+			})
+
+			const persisted = await this.overwriteApiConversationHistory(modifiedApiConversationHistory)
+			if (!persisted) {
+				// The failed write leaves the disk file with the authoritative
+				// history or its safeWriteJson backup. Keep the recovery copy so
+				// the original stays recoverable on disk either way. Put the
+				// original back in memory so no later save from this instance
+				// can persist the unverified slice.
+				this.hydrateApiConversationHistory(existingApiConversationHistory)
+				throw new Error(
+					`[Task#resumeTaskFromHistory] Failed to persist the prepared API conversation history for task ${this.taskId}. The resume stopped before activation, the record stays interrupted, and the original history is preserved at ${recoveryCopyPath}.`,
+				)
+			}
 
 			// All fallible resume preparation is complete. Activate the
 			// interrupted record last, so a preparation failure never consumes
 			// the one interrupted → active resume.
 			if (this.abort || this.abandoned) {
+				await this.restorePreparedResumeHistory(
+					recoveryCopyPath,
+					existingApiConversationHistory,
+					modifiedApiConversationHistory,
+				)
 				return
 			}
 			if (this.initialStatus === "interrupted") {
 				const provider = this.providerRef.deref()
 				if (!provider) {
+					await this.restorePreparedResumeHistory(
+						recoveryCopyPath,
+						existingApiConversationHistory,
+						modifiedApiConversationHistory,
+					)
 					throw new Error(`[Task#resumeTaskFromHistory] Provider unavailable for task ${this.taskId}`)
 				}
-				await provider.resumeInterruptedTask(this.taskId, this.parentTaskId)
+				try {
+					await provider.resumeInterruptedTask(this.taskId, this.parentTaskId)
+				} catch (error) {
+					// The record stays interrupted when the locked commit rejects.
+					// Put the authoritative history back so a retry resumes from
+					// it. The restore never runs when the disk record is already
+					// active, because that attempt belongs to another writer.
+					await this.restorePreparedResumeHistory(
+						recoveryCopyPath,
+						existingApiConversationHistory,
+						modifiedApiConversationHistory,
+					)
+					throw error
+				}
 			}
+
+			// The resume committed, so the prepared history is the accepted
+			// state and the pre-resume copy is no longer needed.
+			await removeResumeHistoryRecoveryCopy(recoveryCopyPath)
 
 			// Task resuming from history item.
 			await this.initiateTaskLoop(newUserContent)
@@ -3406,6 +3463,92 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 				return
 			}
 			throw error
+		}
+	}
+
+	/**
+	 * Restores the authoritative API history after the resume persisted
+	 * prepared history but never activated the record. The interrupted record
+	 * stays retryable, so the disk history must keep its pre-resume content.
+	 * The status gate, the content compare, and the write commit run under one
+	 * advisory lock on the API-history file, so a lock-honoring writer cannot
+	 * slip a newer history between the compare and the commit. The gate fails
+	 * closed: the restore runs only while the persisted record still shows the
+	 * status this resume started from, and an active record always keeps the
+	 * prepared history. Every skipped, rejected, or failed outcome keeps the
+	 * pre-resume recovery copy on disk, so the original history stays
+	 * recoverable after a restart.
+	 */
+	private async restorePreparedResumeHistory(
+		recoveryCopyPath: string,
+		original: ApiMessage[],
+		prepared: ApiMessage[],
+	): Promise<void> {
+		this.hydrateApiConversationHistory(original)
+
+		const provider = this.providerRef.deref()
+		if (!provider) {
+			console.error(
+				`[Task#${this.taskId}] restorePreparedResumeHistory: no provider is available, so the authoritative record status is unknown. The restore did not run and the original history is preserved at ${recoveryCopyPath}.`,
+			)
+			return
+		}
+
+		let result: ResumeHistoryRestoreResult
+		try {
+			result = await restoreApiMessagesIfUnchanged({
+				taskId: this.taskId,
+				globalStoragePath: this.globalStoragePath,
+				expected: prepared,
+				replacement: original,
+				verifyCanRestore: async () => {
+					const diskStatus = await provider.taskHistoryStore.readValidatedDiskStatus(this.taskId)
+					if (diskStatus === "active") {
+						return "committed_elsewhere"
+					}
+					return diskStatus === (this.initialStatus ?? "active") ? "proceed" : "abort"
+				},
+			})
+		} catch (error) {
+			console.error(
+				`[Task#${this.taskId}] restorePreparedResumeHistory: partial failure. The restore write failed, so the disk keeps the prepared history. The original history is preserved at ${recoveryCopyPath} and in this Task memory, and the record stays resumable.`,
+				error,
+			)
+			return
+		}
+
+		switch (result.outcome) {
+			case "restored":
+				await removeResumeHistoryRecoveryCopy(recoveryCopyPath)
+				return
+			case "committed_elsewhere":
+				await removeResumeHistoryRecoveryCopy(recoveryCopyPath)
+				console.error(
+					`[Task#${this.taskId}] restorePreparedResumeHistory: the record is active on disk, so the resume commit landed before the failure. The prepared API history is kept and no restore ran.`,
+				)
+				return
+			case "record_state_unknown":
+				console.error(
+					`[Task#${this.taskId}] restorePreparedResumeHistory: the authoritative record status is unreadable, so the restore failed closed and no restore ran. The original history is preserved at ${recoveryCopyPath}.`,
+					result.error,
+				)
+				return
+			case "record_state_conflict":
+				console.error(
+					`[Task#${this.taskId}] restorePreparedResumeHistory: the record status on disk no longer matches the status this resume started from, so the restore failed closed and no restore ran. The original history is preserved at ${recoveryCopyPath}.`,
+				)
+				return
+			case "foreign_write":
+				console.warn(
+					`[Task#${this.taskId}] restorePreparedResumeHistory: the disk API history changed after preparation, so no restore ran. The original history is preserved at ${recoveryCopyPath}.`,
+				)
+				return
+			case "unreadable":
+				console.error(
+					`[Task#${this.taskId}] restorePreparedResumeHistory: the disk API history is missing or unreadable, so the restore failed closed and no restore ran. The original history is preserved at ${recoveryCopyPath}.`,
+					result.error,
+				)
+				return
 		}
 	}
 
