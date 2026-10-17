@@ -1398,8 +1398,10 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 	/**
 	 * Appends an API turn and records whether an assistant turn reached persistent storage.
 	 * If the message resolves a pending action, retries the save on initial failure before clearing the action.
+	 * Returns whether the turn reached persistent storage, so a caller that must not run before a
+	 * durable result can stop instead of ignoring the save outcome.
 	 */
-	private async addToApiConversationHistory(message: Anthropic.MessageParam, reasoning?: string): Promise<void> {
+	private async addToApiConversationHistory(message: Anthropic.MessageParam, reasoning?: string): Promise<boolean> {
 		const resolvesPendingAction =
 			this.pendingAction &&
 			message.role === "user" &&
@@ -1435,6 +1437,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 			this.assistantMessageSavedToHistory = saved
 			this.resolveAssistantMessagePersistence(saved)
 		}
+		return saved
 	}
 
 	/** Cancels the current persistence generation before creating the next assistant-turn boundary. */
@@ -3522,9 +3525,12 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 				await removeResumeHistoryRecoveryCopy(recoveryCopyPath)
 				return
 			case "committed_elsewhere":
-				await removeResumeHistoryRecoveryCopy(recoveryCopyPath)
+				// The active status alone does not prove this instance's prepared
+				// history is the one on disk: another writer can prepare different
+				// content and activate between our write and this gate. The copy
+				// stays, so this attempt's original history stays recoverable.
 				console.error(
-					`[Task#${this.taskId}] restorePreparedResumeHistory: the record is active on disk, so the resume commit landed before the failure. The prepared API history is kept and no restore ran.`,
+					`[Task#${this.taskId}] restorePreparedResumeHistory: the record is active on disk, so no restore ran and this attempt's prepared history is not proven accepted. The original history is preserved at ${recoveryCopyPath}.`,
 				)
 				return
 			case "record_state_unknown":
@@ -3604,21 +3610,45 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 			await this.say("user_feedback", text ?? "", images)
 		}
 
-		// A denied pending action still starts the task loop. Activate the
-		// interrupted record first, so the persisted status matches the running
-		// task. Approval paths above return early and run their own transitions.
-		if (this.initialStatus === "interrupted") {
-			await provider.resumeInterruptedTask(this.taskId, this.parentTaskId)
-		}
-
 		const deniedContent = text ? formatResponse.toolDeniedWithFeedback(text) : formatResponse.toolDenied()
-		await this.initiateTaskLoop([
+		const denialUserContent: Anthropic.Messages.ContentBlockParam[] = [
 			{
 				type: "tool_result",
 				tool_use_id: action.actionId,
 				content: formatResponse.toolResult(deniedContent, images),
 			},
-		])
+		]
+
+		// A denied pending action still starts the task loop. For an
+		// interrupted record the denial result is persisted before the one
+		// interrupted → active commit, so a failed save cannot leave an active
+		// record whose API history never shows the denial. Approval paths
+		// above return early and run their own transitions.
+		if (this.initialStatus === "interrupted") {
+			const persisted = await this.addToApiConversationHistory({ role: "user", content: denialUserContent })
+			if (!persisted) {
+				// Drop the unpersisted append so no later save from this
+				// instance can persist it, and stop before activation. The
+				// record stays interrupted with its durable pending action, so
+				// the replay stays retryable.
+				this.apiConversationHistory.pop()
+				throw new Error(
+					`[Task#resumePendingTaskAction] Failed to persist the denial result for task ${this.taskId}. The resume stopped before activation, the record stays interrupted, and the pending action stays replayable.`,
+				)
+			}
+			// An activation rejection, for example a stale parent linkage,
+			// leaves the record interrupted with the denial durable and the
+			// action settled, so a replay proceeds from the committed denial.
+			// No API-history restore runs: the denial is a committed user
+			// decision, not an unaccepted prepared slice.
+			await provider.resumeInterruptedTask(this.taskId, this.parentTaskId)
+			// The denial result is already persisted, so the loop must not
+			// append it again.
+			await this.initiateTaskLoop(denialUserContent, { userContentAlreadyPersisted: true })
+			return
+		}
+
+		await this.initiateTaskLoop(denialUserContent)
 	}
 
 	/**
@@ -3978,7 +4008,10 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 
 	// Task Loop
 
-	private async initiateTaskLoop(userContent: Anthropic.Messages.ContentBlockParam[]): Promise<void> {
+	private async initiateTaskLoop(
+		userContent: Anthropic.Messages.ContentBlockParam[],
+		options: { userContentAlreadyPersisted?: boolean } = {},
+	): Promise<void> {
 		// Kicks off the checkpoints initialization process in the background.
 		// `getCheckpointService` wraps its full body in a try/catch and returns
 		// `undefined` on failure (see src/core/checkpoints/index.ts), so the
@@ -3991,8 +4024,14 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 
 		this.emit(RooCodeEventName.TaskStarted)
 
+		let firstTurnOptions: typeof options | undefined = options
 		while (!this.abort) {
-			const didEndLoop = await this.recursivelyMakeClineRequests(nextUserContent, includeFileDetails)
+			const didEndLoop = await this.recursivelyMakeClineRequests(
+				nextUserContent,
+				includeFileDetails,
+				firstTurnOptions,
+			)
+			firstTurnOptions = undefined
 			includeFileDetails = false // We only need file details the first time.
 
 			// The way this agentic loop works is that cline will be given a
@@ -4019,15 +4058,24 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 	public async recursivelyMakeClineRequests(
 		userContent: Anthropic.Messages.ContentBlockParam[],
 		includeFileDetails: boolean = false,
+		options: { userContentAlreadyPersisted?: boolean } = {},
 	): Promise<boolean> {
 		interface StackItem {
 			userContent: Anthropic.Messages.ContentBlockParam[]
 			includeFileDetails: boolean
 			retryAttempt?: number
 			userMessageWasRemoved?: boolean // Track if user message was removed due to empty response
+			userContentAlreadyPersisted?: boolean // First turn of a denial replay: the content was persisted before activation
 		}
 
-		const stack: StackItem[] = [{ userContent, includeFileDetails, retryAttempt: 0 }]
+		const stack: StackItem[] = [
+			{
+				userContent,
+				includeFileDetails,
+				retryAttempt: 0,
+				userContentAlreadyPersisted: options.userContentAlreadyPersisted,
+			},
+		]
 
 		while (stack.length > 0) {
 			const currentItem = stack.pop()!
@@ -4155,11 +4203,16 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 			const finalUserContent = [...contentWithoutEnvDetails, { type: "text" as const, text: environmentDetails }]
 			// See shouldAddUserMessageToHistory for the full add/skip rules (retry/empty/removed).
 			const isEmptyUserContent = currentUserContent.length === 0
-			const shouldAddUserMessage = shouldAddUserMessageToHistory({
-				retryAttempt: currentItem.retryAttempt,
-				isEmptyUserContent,
-				userMessageWasRemoved: currentItem.userMessageWasRemoved,
-			})
+			// A persisted denial replay must not append its first turn again,
+			// so the already-persisted flag suppresses the history write and
+			// the empty-response removal that keys off it.
+			const shouldAddUserMessage =
+				!currentItem.userContentAlreadyPersisted &&
+				shouldAddUserMessageToHistory({
+					retryAttempt: currentItem.retryAttempt,
+					isEmptyUserContent,
+					userMessageWasRemoved: currentItem.userMessageWasRemoved,
+				})
 			if (shouldAddUserMessage) {
 				await this.addToApiConversationHistory({ role: "user", content: finalUserContent })
 				this.messageCounts.user++

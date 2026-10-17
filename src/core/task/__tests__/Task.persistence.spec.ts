@@ -2417,7 +2417,7 @@ describe("Task persistence", () => {
 					role: "user",
 					content: [{ type: "tool_result", tool_use_id: "finish-action", content: "Denied" }],
 				}),
-			).resolves.toBeUndefined()
+			).resolves.toBe(true)
 
 			expect((task as unknown as { pendingAction?: PendingTaskAction }).pendingAction).toEqual(pendingAction)
 			expect(consoleError).toHaveBeenCalledWith(
@@ -2635,7 +2635,7 @@ describe("Task persistence", () => {
 			consoleError.mockRestore()
 		})
 
-		it("keeps the prepared history and removes the recovery copy when the record is already active", async () => {
+		it("keeps the prepared history and the recovery copy when the record is already active", async () => {
 			mockReadTaskMessages.mockResolvedValue([])
 			mockReadApiMessages
 				.mockResolvedValueOnce([{ role: "user", content: "Continue" }])
@@ -2652,10 +2652,13 @@ describe("Task persistence", () => {
 			await expect(task["resumeTaskFromHistory"]()).rejects.toThrow("parent linkage changed")
 
 			expect(mockProvider.resumeInterruptedTask).toHaveBeenCalledTimes(1)
-			// The prepared history belongs to the writer that committed the
-			// active record, so the recovery copy is obsolete and removed.
-			expect(mockRemoveResumeHistoryRecoveryCopy).toHaveBeenCalledTimes(1)
+			// The active status alone does not prove this attempt's prepared
+			// history was the one accepted, so the recovery copy stays and the
+			// partial-failure log names its path.
+			expect(mockRemoveResumeHistoryRecoveryCopy).not.toHaveBeenCalled()
+			const recoveryCopyPath = await mockCreateResumeHistoryRecoveryCopy.mock.results[0].value
 			expect(consoleError).toHaveBeenCalledWith(expect.stringContaining("active on disk"))
+			expect(consoleError).toHaveBeenCalledWith(expect.stringContaining(recoveryCopyPath))
 			consoleError.mockRestore()
 		})
 

@@ -26,6 +26,7 @@ interface Transition {
 	delegation?: { parentId: TaskId }
 	completion?: { childId: TaskId; pendingActionId?: string }
 	settlement?: { taskId: TaskId; actionId: string }
+	deniedReplay?: { taskId: TaskId; actionId: string }
 }
 
 interface TraceStep {
@@ -47,6 +48,7 @@ const expectedActions = [
 	"interrupt",
 	"resume",
 	"resume-stale",
+	"resume-denied",
 	"complete",
 	"abandon",
 	"stage",
@@ -118,6 +120,20 @@ const semanticWitnesses = {
 			beforeAction.actionId !== transition.completion.pendingActionId &&
 			after?.status === "completed" &&
 			canonicalTask(after.pendingAction) === canonicalTask(beforeAction)
+		)
+	},
+	// The denied pending-action replay persists its denial result before the
+	// activation commit, so the durable denial settles exactly its matching
+	// action and the record activates without it.
+	"denied-replay-settles-matching-action": ({ prev, next, transition }: WitnessContext) => {
+		if (transition.deniedReplay === undefined) return false
+		const before = prev[transition.deniedReplay.taskId]
+		const after = next[transition.deniedReplay.taskId]
+		return (
+			before?.status === "interrupted" &&
+			before.pendingAction?.actionId === transition.deniedReplay.actionId &&
+			after?.status === "active" &&
+			after.pendingAction === undefined
 		)
 	},
 } satisfies Record<string, (context: WitnessContext) => boolean>
@@ -212,6 +228,17 @@ function transitions(state: ModelState): Transition[] {
 				name: `resume(${parentId})`,
 				next: replace(state, { ...resumed, modelWasResumed: true }),
 			})
+			// The denied replay uses the same production resume reducers, and
+			// its denial result is durable before the activation commit, so
+			// the matching pending action is settled in the same step.
+			for (const actionId of actionIds) {
+				if (parent.pendingAction?.actionId !== actionId) continue
+				result.push({
+					name: `resume-denied(${parentId}, ${actionId})`,
+					next: replace(state, { ...resumed, pendingAction: undefined }),
+					deniedReplay: { taskId: parentId, actionId },
+				})
+			}
 		} else if (parent.status === "interrupted" && parent.parentTaskId && lineageParent !== undefined) {
 			// Representative rejected event: the parent re-delegated elsewhere,
 			// so the store's parent-locked ownership check must reject the

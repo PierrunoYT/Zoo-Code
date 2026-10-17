@@ -6,6 +6,7 @@ import type { HistoryItem } from "@roo-code/types"
 
 import { TaskHistoryStore } from "../TaskHistoryStore"
 import { abandonDelegatedChild, delegateTaskToChild, LifecycleTransitionError } from "../taskLifecycle"
+import { acquireFileLock } from "../../../utils/fileLock"
 
 // Wrap the real fs/promises so a test can pause inside the per-file lock
 // while every call still runs against the real filesystem.
@@ -296,6 +297,129 @@ describe("TaskHistoryStore real cross-host locking", () => {
 		} finally {
 			storeA.dispose()
 			storeB.dispose()
+			await fs.rm(storagePath, { recursive: true, force: true })
+		}
+	})
+
+	it("waits for the awaited child's file lock while a peer write hides the record", async () => {
+		const storagePath = await fs.mkdtemp(path.join(os.tmpdir(), "redelegation-child-lock-window-"))
+		const store = new TaskHistoryStore(storagePath)
+		const parent = {
+			...item("parent"),
+			status: "delegated" as const,
+			awaitingChildId: "child",
+			delegatedToId: "child",
+			childIds: ["child"],
+		}
+		const child = { ...item("child"), status: "interrupted" as const, parentTaskId: "parent", rootTaskId: "parent" }
+
+		try {
+			await store.initialize()
+			await store.upsert(parent)
+			await store.upsert(child)
+
+			// A peer safeWriteJson holds the child file lock and has renamed
+			// the record to its backup, so the target is missing until the
+			// commit rename. The delegation must wait for the lock instead of
+			// rejecting the hidden record as missing.
+			const childFilePath = path.join(storagePath, "tasks", "child", "history_item.json")
+			const releaseChildLock = await acquireFileLock(childFilePath)
+			await fs.unlink(childFilePath)
+
+			const originalRead = store["readValidatedTaskFile"].bind(store)
+			let markParentRecordRead!: () => void
+			const parentRecordRead = new Promise<void>((resolve) => {
+				markParentRecordRead = resolve
+			})
+			store["readValidatedTaskFile"] = async (taskId: string) => {
+				if (taskId === "parent") markParentRecordRead()
+				return originalRead(taskId)
+			}
+
+			let settled = false
+			const delegation = store
+				.atomicUpdateParentDelegation("parent", (diskParent, awaitedChildDiskStatus) =>
+					delegateTaskToChild(diskParent, "child-b", awaitedChildDiskStatus),
+				)
+				.then(
+					() => {
+						settled = true
+					},
+					() => {
+						settled = true
+					},
+				)
+			// The parent record is read first. After the flush, an unlocked
+			// child read would already have rejected the hidden record, while
+			// the locked read cannot settle before the release below.
+			await parentRecordRead
+			await new Promise((resolve) => setTimeout(resolve, 20))
+			expect(settled).toBe(false)
+
+			// The peer commit makes the still-interrupted record visible again.
+			await fs.writeFile(childFilePath, JSON.stringify(child), "utf8")
+			await releaseChildLock()
+			await delegation
+
+			await store.invalidate("parent")
+			expect(store.get("parent")).toMatchObject({ status: "delegated", awaitingChildId: "child-b" })
+		} finally {
+			store.dispose()
+			await fs.rm(storagePath, { recursive: true, force: true })
+		}
+	})
+
+	it("re-reads the awaited child behind its lock and rejects a peer write that resumed it", async () => {
+		const storagePath = await fs.mkdtemp(path.join(os.tmpdir(), "redelegation-child-lock-resumed-"))
+		const store = new TaskHistoryStore(storagePath)
+		const parent = {
+			...item("parent"),
+			status: "delegated" as const,
+			awaitingChildId: "child",
+			delegatedToId: "child",
+			childIds: ["child"],
+		}
+		const child = { ...item("child"), status: "interrupted" as const, parentTaskId: "parent", rootTaskId: "parent" }
+
+		try {
+			await store.initialize()
+			await store.upsert(parent)
+			await store.upsert(child)
+
+			// The peer commits a resumed (active) child during the hidden
+			// window. The locked re-read must observe that committed record
+			// and reject the re-delegation.
+			const childFilePath = path.join(storagePath, "tasks", "child", "history_item.json")
+			const releaseChildLock = await acquireFileLock(childFilePath)
+			await fs.unlink(childFilePath)
+
+			const originalRead = store["readValidatedTaskFile"].bind(store)
+			let markParentRecordRead!: () => void
+			const parentRecordRead = new Promise<void>((resolve) => {
+				markParentRecordRead = resolve
+			})
+			store["readValidatedTaskFile"] = async (taskId: string) => {
+				if (taskId === "parent") markParentRecordRead()
+				return originalRead(taskId)
+			}
+
+			const delegation = store.atomicUpdateParentDelegation("parent", (diskParent, awaitedChildDiskStatus) =>
+				delegateTaskToChild(diskParent, "child-b", awaitedChildDiskStatus),
+			)
+			// The parent record is read first. After the flush, an unlocked
+			// child read would already have rejected with a missing-record
+			// error, while the locked read waits for the release below.
+			await parentRecordRead
+			await new Promise((resolve) => setTimeout(resolve, 20))
+			await fs.writeFile(childFilePath, JSON.stringify({ ...child, status: "active" }), "utf8")
+			await releaseChildLock()
+
+			await expect(delegation).rejects.toThrow("not interrupted")
+
+			await store.invalidate("parent")
+			expect(store.get("parent")).toMatchObject({ status: "delegated", awaitingChildId: "child" })
+		} finally {
+			store.dispose()
 			await fs.rm(storagePath, { recursive: true, force: true })
 		}
 	})

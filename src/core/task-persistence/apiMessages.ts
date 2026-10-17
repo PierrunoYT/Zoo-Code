@@ -265,8 +265,7 @@ export interface RestoreApiMessagesIfUnchangedOptions {
  * history between the compare and the commit. The restore writes only when
  * the disk still holds the prepared slice; any other content, including a
  * newer history from a competing host, is left untouched. Callers keep the
- * pre-resume recovery copy for every outcome except `restored` and
- * `committed_elsewhere`.
+ * pre-resume recovery copy for every outcome except `restored`.
  *
  * The guarantee covers writers that honor the shared advisory lock, which is
  * every in-repo writer of this file. A process that edits the file without

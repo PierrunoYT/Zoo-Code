@@ -6,7 +6,7 @@ import * as path from "path"
 
 import * as vscode from "vscode"
 
-import type { HistoryItem } from "@roo-code/types"
+import type { HistoryItem, PendingTaskAction } from "@roo-code/types"
 import { TelemetryService } from "@roo-code/telemetry"
 
 import { Task } from "../Task"
@@ -119,6 +119,9 @@ vi.mock("../../ignore/RooIgnoreController")
 vi.mock("../../condense", () => ({
 	CondenseContext: vi.fn(),
 	summarizeTask: vi.fn().mockResolvedValue({ success: false }),
+	// The seeded histories hold no condensation markers, so the identity
+	// mapping matches the real filter for these tests.
+	getEffectiveApiHistory: vi.fn((messages: unknown[]) => messages),
 }))
 
 type TaskTestAccess = {
@@ -182,7 +185,7 @@ function findRecoveryCopyName(taskDir: string): Promise<string | undefined> {
 	return fs.readdir(taskDir).then((names) => names.find((name) => name.includes(".pre-resume-")))
 }
 
-describe("Task.resumeTaskFromHistory api-history persistence on real files", () => {
+describe("Task resume api-history persistence on real files", () => {
 	let storagePath: string
 	let provider: ClineProvider & Record<string, unknown>
 	const realRename = vi.mocked(fs.rename).getMockImplementation()!
@@ -517,5 +520,230 @@ describe("Task.resumeTaskFromHistory api-history persistence on real files", () 
 			JSON.stringify(authoritativeApiHistory),
 		)
 		consoleError.mockRestore()
+	})
+})
+
+describe("Task.resumePendingTaskAction denial persistence on real files", () => {
+	let storagePath: string
+	let provider: ClineProvider & Record<string, unknown>
+	const realRename = vi.mocked(fs.rename).getMockImplementation()!
+
+	const finishAction: PendingTaskAction = {
+		kind: "finish_subtask",
+		actionId: "finish-action-1",
+		approvalText: "{}",
+		parentTaskId: parentId,
+		result: "Done",
+	}
+
+	// The pending denial answers this tool call, so the seeded history ends
+	// with the assistant turn that requested it.
+	const denialApiHistory: ApiMessage[] = [
+		{ role: "user", content: [{ type: "text", text: "do the thing" }], ts: 1, messageId: "m-1" },
+		{
+			role: "assistant",
+			content: [{ type: "tool_use", id: finishAction.actionId, name: "finish_subtask", input: {} }],
+			ts: 2,
+			messageId: "m-2",
+		},
+	]
+
+	function makeDelegatedParent(): HistoryItem {
+		return {
+			id: parentId,
+			number: 2,
+			ts: 1,
+			task: "Parent task",
+			tokensIn: 0,
+			tokensOut: 0,
+			totalCost: 0,
+			status: "delegated",
+			awaitingChildId: childId,
+			delegatedToId: childId,
+			childIds: [childId],
+		}
+	}
+
+	function makePendingChildRecord(): HistoryItem {
+		return makeChildRecord({ pendingAction: finishAction })
+	}
+
+	function prepareDeniedTask(history: HistoryItem): { task: Task; resumeActivation: ReturnType<typeof vi.spyOn> } {
+		const task = new Task({
+			provider,
+			apiConfiguration: {
+				apiProvider: providerIdentifiers.anthropic,
+				apiModelId: "claude-3-5-sonnet-20241022",
+				apiKey: "test-api-key",
+			},
+			historyItem: history,
+			startTask: false,
+		})
+		vi.spyOn(task, "ask").mockResolvedValue({ response: "noButtonClicked" })
+		provider.postStateToWebviewWithoutTaskHistory = vi.fn().mockResolvedValue(undefined)
+		const resumeActivation = vi.spyOn(provider, "resumeInterruptedTask")
+		return { task, resumeActivation }
+	}
+
+	function countDenialResults(messages: ApiMessage[]): number {
+		return messages.filter(
+			(message) =>
+				message.role === "user" &&
+				Array.isArray(message.content) &&
+				message.content.some(
+					(block) =>
+						block.type === "tool_result" &&
+						(block as { tool_use_id?: string }).tool_use_id === finishAction.actionId,
+				),
+		).length
+	}
+
+	beforeEach(async () => {
+		if (!TelemetryService.hasInstance()) {
+			TelemetryService.createInstance([])
+		}
+
+		storagePath = await fs.mkdtemp(path.join(os.tmpdir(), "task-denial-persistence-"))
+
+		const mockExtensionContext = {
+			globalState: {
+				get: vi.fn().mockReturnValue(undefined),
+				update: vi.fn().mockResolvedValue(undefined),
+				keys: vi.fn().mockReturnValue([]),
+			},
+			globalStorageUri: { fsPath: storagePath },
+			workspaceState: {
+				get: vi.fn().mockReturnValue(undefined),
+				update: vi.fn().mockResolvedValue(undefined),
+				keys: vi.fn().mockReturnValue([]),
+			},
+			secrets: {
+				get: vi.fn().mockResolvedValue(undefined),
+				store: vi.fn().mockResolvedValue(undefined),
+				delete: vi.fn().mockResolvedValue(undefined),
+			},
+			extensionUri: { fsPath: "/mock/extension/path" },
+			extension: { packageJSON: { version: "1.0.0" } },
+		} as unknown as vscode.ExtensionContext
+
+		const mockOutputChannel = {
+			appendLine: vi.fn(),
+			append: vi.fn(),
+			clear: vi.fn(),
+			show: vi.fn(),
+			hide: vi.fn(),
+			dispose: vi.fn(),
+		} as unknown as vscode.OutputChannel
+
+		provider = new ClineProvider(
+			mockExtensionContext,
+			mockOutputChannel,
+			"sidebar",
+			new ContextProxy(mockExtensionContext),
+			new WebviewFocusTracker(),
+		) as ClineProvider & Record<string, unknown>
+
+		provider.postMessageToWebview = vi.fn().mockResolvedValue(undefined)
+		provider.postStateToWebview = vi.fn().mockResolvedValue(undefined)
+		provider.log = vi.fn()
+
+		await provider.taskHistoryStore.initialize()
+	})
+
+	afterEach(async () => {
+		provider.taskHistoryStore.dispose()
+		vi.mocked(fs.rename).mockImplementation(realRename)
+		await fs.rm(storagePath, { recursive: true, force: true }).catch(() => {})
+	})
+
+	it("persists the denial result before activation and settles the action once", async () => {
+		await provider.taskHistoryStore.upsert(makeDelegatedParent())
+		await provider.taskHistoryStore.upsert(makePendingChildRecord())
+		await seedTaskFiles(storagePath, childId, denialApiHistory)
+
+		const { task, resumeActivation } = prepareDeniedTask(makePendingChildRecord())
+		// Drive exactly one real assistant turn through the resumed task; the
+		// abandoned exit stops the loop right after the stream. The spy also
+		// keeps the mocked request off the network.
+		vi.spyOn(task, "attemptApiRequest").mockImplementation(() =>
+			(async function* () {
+				yield { type: "text" as const, text: "understood" }
+				task["abandoned"] = true
+			})(),
+		)
+		// The real model-metadata fetch reaches outside the test scope, so the
+		// turn runs on the stubbed seam like the other loop-driving suites.
+		const loopAccess = task as unknown as { safeEnsureModelFetched: () => Promise<unknown> }
+		loopAccess.safeEnsureModelFetched = vi.fn().mockResolvedValue(undefined)
+
+		await task["resumeTaskFromHistory"]()
+
+		expect(resumeActivation).toHaveBeenCalledTimes(1)
+		// The loop entered its first turn: the denial turn posts its
+		// api_req_started state before the request.
+		expect(provider.postStateToWebviewWithoutTaskHistory).toHaveBeenCalled()
+		const persisted = await readPersistedApiHistory(storagePath, childId)
+		// The denial result is on disk exactly once: the pre-activation write
+		// committed it, and the loop's first turn did not append it again.
+		expect(countDenialResults(persisted)).toBe(1)
+		const persistedRecord = await readPersistedRecord(storagePath, childId)
+		expect(persistedRecord.status).toBe("active")
+		// The durable denial settled the pending action.
+		expect(persistedRecord.pendingAction).toBeUndefined()
+		expect(provider.taskHistoryStore.get(childId)?.status).toBe("active")
+		expect(provider.taskHistoryStore.get(childId)?.pendingAction).toBeUndefined()
+	})
+
+	it("stops before activation and keeps the pending action durable when the denial result fails to persist", async () => {
+		await provider.taskHistoryStore.upsert(makeDelegatedParent())
+		await provider.taskHistoryStore.upsert(makePendingChildRecord())
+		await seedTaskFiles(storagePath, childId, denialApiHistory)
+
+		vi.mocked(fs.rename).mockImplementation(async (oldPath, newPath) => {
+			const targetsApiHistory =
+				String(newPath).endsWith(GlobalFileNames.apiConversationHistory) && String(oldPath).includes(".new_")
+			if (targetsApiHistory) {
+				throw new Error("injected api history rename failure")
+			}
+			return realRename(oldPath, newPath)
+		})
+
+		const { task, resumeActivation } = prepareDeniedTask(makePendingChildRecord())
+		const request = vi.spyOn(task, "attemptApiRequest")
+
+		await expect(task["resumeTaskFromHistory"]()).rejects.toThrow("Failed to persist the denial result")
+
+		expect(resumeActivation).not.toHaveBeenCalled()
+		expect(request).not.toHaveBeenCalled()
+		// The disk keeps the authoritative history and the retryable record.
+		expect(await readPersistedApiHistory(storagePath, childId)).toEqual(denialApiHistory)
+		const persistedRecord = await readPersistedRecord(storagePath, childId)
+		expect(persistedRecord.status).toBe("interrupted")
+		expect(persistedRecord.pendingAction).toMatchObject({ actionId: finishAction.actionId })
+		// The unpersisted append is dropped from memory, so no later save from
+		// this instance can persist the denial from here.
+		expect(task.apiConversationHistory).toEqual(denialApiHistory)
+	})
+
+	it("keeps the denial durable and settled when the stale parent rejects the activation", async () => {
+		// The parent no longer awaits the child, so the locked commit rejects.
+		await provider.taskHistoryStore.upsert({ ...makeDelegatedParent(), status: "active" })
+		await provider.taskHistoryStore.upsert(makePendingChildRecord())
+		await seedTaskFiles(storagePath, childId, denialApiHistory)
+
+		const { task, resumeActivation } = prepareDeniedTask(makePendingChildRecord())
+		const request = vi.spyOn(task, "attemptApiRequest")
+
+		await expect(task["resumeTaskFromHistory"]()).rejects.toThrow("no longer awaits it")
+
+		expect(resumeActivation).toHaveBeenCalledTimes(1)
+		expect(request).not.toHaveBeenCalled()
+		// The committed denial stays on disk; it is a settled user decision,
+		// not an unaccepted prepared slice, so no restore removes it.
+		const persisted = await readPersistedApiHistory(storagePath, childId)
+		expect(countDenialResults(persisted)).toBe(1)
+		const persistedRecord = await readPersistedRecord(storagePath, childId)
+		expect(persistedRecord.status).toBe("interrupted")
+		expect(persistedRecord.pendingAction).toBeUndefined()
 	})
 })

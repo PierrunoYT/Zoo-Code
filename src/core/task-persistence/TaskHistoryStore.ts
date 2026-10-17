@@ -1255,7 +1255,22 @@ export class TaskHistoryStore {
 							`[TaskHistoryStore] atomicUpdateParentDelegation: delegated task ${parentTaskId} has no awaited child`,
 						)
 					}
-					const awaitedChild = await this.readValidatedTaskFile(awaitedChildId)
+					if (awaitedChildId === parentTaskId) {
+						// The lock below is not reentrant, so a self-await
+						// would deadlock instead of failing closed.
+						throw new LifecycleTransitionError(
+							`[TaskHistoryStore] atomicUpdateParentDelegation: delegated task ${parentTaskId} awaits itself`,
+						)
+					}
+					// Read under the child record's advisory lock, in the
+					// same parent-before-child order as
+					// resumeInterruptedTask. A peer safeWriteJson renames
+					// the target to its backup before the commit rename,
+					// and an unlocked read inside that window rejects a
+					// valid delegation with a missing-record error.
+					const awaitedChild = await withFileLock(await this.getTaskFilePath(awaitedChildId), () =>
+						this.readValidatedTaskFile(awaitedChildId),
+					)
 					awaitedChildDiskStatus = awaitedChild.status
 					if (awaitedChildDiskStatus !== "interrupted") {
 						throw new LifecycleTransitionError(
