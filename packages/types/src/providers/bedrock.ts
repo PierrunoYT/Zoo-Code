@@ -270,6 +270,7 @@ export const bedrockModels = {
 		// 128K max output tokens per the AWS Bedrock model card:
 		// https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-5-5.html
 		maxTokens: 128_000,
+		supportsMaxTokens: true,
 		contextWindow: 1_000_000, // 1M context window native (no beta header required)
 		supportsImages: true,
 		supportsPromptCache: true,
@@ -770,4 +771,41 @@ export function getBedrockInferenceModelId(
 			? AWS_INFERENCE_PROFILE_MAPPING.find(([pattern]) => region.startsWith(pattern))?.[1]
 			: undefined
 	return prefix ? `${prefix}${modelId}` : modelId
+}
+
+const isBedrockModelId = (id: string): id is BedrockModelId => Object.prototype.hasOwnProperty.call(bedrockModels, id)
+
+/** Stored in `awsCustomArnBaseModelId` when the user explicitly chooses "Other" for a custom ARN. */
+export const BEDROCK_CUSTOM_ARN_OTHER_BASE_MODEL = "other"
+
+export const isBedrockFoundationModelArn = (arn: string | undefined): boolean =>
+	!!arn && /^arn:[^:]+:bedrock:[^:]+:[^:]*:foundation-model\//.test(arn)
+
+/**
+ * Resolves the registry model a custom ARN points to:
+ * - a foundation-model ARN always resolves to the model it names, because that model is invoked;
+ * - an explicit "Other" choice resolves to undefined, even when the ARN names a model;
+ * - otherwise the user's choice when it is a known model, then a model named at the end of the ARN
+ *   (e.g. `inference-profile/us.anthropic.claude-opus-4-8`).
+ * Returns undefined when the model is unknown (e.g. application inference profiles).
+ */
+export const resolveBedrockCustomArnBaseModelId = (
+	customArn: string | undefined,
+	baseModelId: string | undefined,
+): BedrockModelId | undefined => {
+	const namedModelId = customArn
+		? (Object.keys(bedrockModels) as BedrockModelId[]).find(
+				(id) => customArn.endsWith(`/${id}`) || customArn.endsWith(`.${id}`),
+			)
+		: undefined
+
+	if (isBedrockFoundationModelArn(customArn)) {
+		return namedModelId
+	}
+
+	if (baseModelId === BEDROCK_CUSTOM_ARN_OTHER_BASE_MODEL) {
+		return undefined
+	}
+
+	return baseModelId && isBedrockModelId(baseModelId) ? baseModelId : namedModelId
 }
