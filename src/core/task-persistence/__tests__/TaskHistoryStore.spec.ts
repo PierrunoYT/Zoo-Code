@@ -8,6 +8,7 @@ import type { HistoryItem } from "@roo-code/types"
 
 import { TaskHistoryStore, assertValidTransition } from "../TaskHistoryStore"
 import { GlobalFileNames } from "../../../shared/globalFileNames"
+import { acquireFileLock } from "../../../utils/fileLock"
 import { ClineProvider } from "../../webview/ClineProvider"
 
 vi.mock("../../../utils/storage", () => ({
@@ -539,6 +540,8 @@ describe("TaskHistoryStore", () => {
 			"/outside",
 			"C:outside",
 			".. ",
+			"task.",
+			"task ",
 			"child\u0000",
 		])("rejects unsafe task ID %j", async (taskId) => {
 			await store.initialize()
@@ -604,6 +607,48 @@ describe("TaskHistoryStore", () => {
 
 			await expect(store.refreshStrict("owner")).rejects.toThrow("Invalid task history record")
 			expect(store.get("owner")).toEqual(owner)
+		})
+
+		it("names only the task ID, not the storage path, when rejecting a record", async () => {
+			await store.initialize()
+			store.dispose()
+			await store.upsert(makeHistoryItem({ id: "owner" }))
+			await fs.writeFile(path.join(tmpDir, "tasks", "owner", GlobalFileNames.historyItem), "{}")
+
+			const error = await store.refreshStrict("owner").catch((caught: unknown) => caught)
+
+			expect(error).toBeInstanceOf(Error)
+			expect((error as Error).message).toBe('Invalid task history record: "owner"')
+			expect((error as Error).message).not.toContain(tmpDir)
+		})
+
+		it("treats a missing task directory as a missing record", async () => {
+			await store.initialize()
+			store.dispose()
+			await store.upsert(makeHistoryItem({ id: "owner" }))
+			await fs.rm(path.join(tmpDir, "tasks", "owner"), { recursive: true })
+
+			await expect(store.refreshStrict("owner")).resolves.toBeUndefined()
+			expect(store.get("owner")).toBeUndefined()
+		})
+
+		it("waits out a peer write's rename window instead of evicting the record", async () => {
+			await store.initialize()
+			store.dispose()
+			const owner = makeHistoryItem({ id: "owner", status: "delegated", awaitingChildId: "child" })
+			await store.upsert(owner)
+			const filePath = path.join(tmpDir, "tasks", "owner", GlobalFileNames.historyItem)
+			// Simulate safeWriteJson mid-write in another process: lock held, target renamed away.
+			const releaseLock = await acquireFileLock(filePath)
+			await fs.unlink(filePath)
+
+			const refresh = store.refreshStrict("owner")
+			await new Promise((resolve) => setTimeout(resolve, 50))
+			await fs.writeFile(filePath, JSON.stringify({ ...owner, tokensIn: 999 }))
+			await releaseLock()
+			await refresh
+
+			expect(store.get("owner")).toEqual({ ...owner, tokensIn: 999 })
 		})
 
 		it("re-reads a valid record from disk", async () => {

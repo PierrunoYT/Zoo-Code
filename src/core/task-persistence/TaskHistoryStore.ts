@@ -812,6 +812,26 @@ export class TaskHistoryStore {
 		return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT"
 	}
 
+	/** Return a history file's contents read under its advisory lock, or `undefined` when the task is gone. */
+	private async readTaskFileUnderLock(filePath: string): Promise<string | undefined> {
+		try {
+			// The lock lives beside the file; a missing task directory means the task is gone, and
+			// checking first avoids proper-lockfile's retry backoff on that ENOENT.
+			await fs.stat(path.dirname(filePath))
+			return await withFileLock(filePath, async (absoluteFilePath) => {
+				try {
+					return await fs.readFile(absoluteFilePath, "utf8")
+				} catch (error) {
+					if (this.isFileNotFoundError(error)) return undefined
+					throw error
+				}
+			})
+		} catch (error) {
+			if (this.isFileNotFoundError(error)) return undefined
+			throw error
+		}
+	}
+
 	private async getDelegationRepairIntentPath(): Promise<string> {
 		const tasksDir = await this.getTasksDir()
 		return path.join(tasksDir, GlobalFileNames.delegationRepairIntent)
@@ -842,24 +862,23 @@ export class TaskHistoryStore {
 	 * Re-read a single task for an ownership decision. Unlike `invalidate()`, only a missing file
 	 * removes the cache entry; an unreadable, malformed, or mismatched record throws and keeps the
 	 * cached entry, so callers fail closed instead of treating the task as absent.
+	 *
+	 * The read holds the same advisory lock as `safeWriteJson`, so a peer process's write cannot
+	 * expose its rename window (target briefly absent) as a missing record.
 	 */
 	async refreshStrict(taskId: string): Promise<void> {
 		return this.withLock(async () => {
 			const filePath = await this.getTaskFilePath(taskId)
-			let raw: string
-			try {
-				raw = await fs.readFile(filePath, "utf8")
-			} catch (error) {
-				if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
-					this.cache.delete(taskId)
-					this.taskFileMtimes.delete(taskId)
-					return
-				}
-				throw error
+			const raw = await this.readTaskFileUnderLock(filePath)
+			if (raw === undefined) {
+				this.cache.delete(taskId)
+				this.taskFileMtimes.delete(taskId)
+				return
 			}
 			const parsed = historyItemSchema.safeParse(JSON.parse(raw))
 			if (!parsed.success || parsed.data.id !== taskId) {
-				throw new Error(`Invalid task history record: ${filePath}`)
+				// Name only the validated ID; the absolute storage path must not reach tool results.
+				throw new Error(`Invalid task history record: ${JSON.stringify(taskId)}`)
 			}
 			this.cache.set(taskId, parsed.data)
 			this.taskFileMtimes.delete(taskId)
