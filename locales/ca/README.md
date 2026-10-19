@@ -47,11 +47,11 @@ Zoo Code parteix de la base creada per Roo Code i continua ampliant-la amb:
 - **Fluxos de terminal i edició més fiables** — correccions per a la finalització prematura del terminal, les condicions de cursa en l'estat de les tasques, la gestió del context, l'edició de diff i l'ús d'eines específiques de cada proveïdor.
 - **Més control sobre el teu espai de treball** — gestió de regles, restriccions MCP per mode, controls de rutes multiarrel, opcions de raonament dels models i accions per revisar els canvis en completar una tasca.
 
-## Novetats a la v3.84.0
+## Novetats a la v3.90.0
 
-- ✨ **Nous models SOTA afegits:** Utilitza GPT-6 Sol, GPT-6 Luna i Claude Opus 5.5 amb els proveïdors compatibles.
-- 🧭 **Tasques i subtasques més fiables:** Mantén aïllats els modes delegats, conserva els enllaços de les subtasques després d'aturades repetides i protegeix la configuració de l'orquestrador quan les ordres amb barra canvien de mode.
-- 🛠️ **Comportament més fiable del terminal, els proveïdors i la cerca de codi:** Millora el terminal a Windows i en entorns que no són en anglès, reforça les respostes i la cancel·lació dels proveïdors i fes que la cerca de codi utilitzi l'espai de treball correcte de manera més consistent.
+- ✨ **Proveïdors i models:** GitHub Copilot ara és un proveïdor: inicia la sessió i Zoo Code carrega els teus models de Copilot. IO Intelligence és un proveïdor amb la seva pròpia clau d'API. Gemini 4 Argon és a Gemini i Vertex. GPT-6 Luna és a OpenCode Go. Gemini 4 Argon i GPT-6 Luna també són a Zoo Gateway.
+- 🧭 **Execució d'eines:** Repetir la mateixa crida d'eina mostra un avís i després Zoo Code atura aquest bucle. Desactivar `attempt_completion` ja no deixa una tasca sense poder acabar. Els missatges en cua passen les mateixes comprovacions de protecció d'ordres que les ordres que envies directament.
+- ⚡ **Raonament i streaming:** El pensament adaptatiu d'Anthropic es mostra al xat i es compten els thinking tokens. L'interruptor R1 conserva el raonament de llama.cpp, Ollama i LM Studio. Codex conserva el raonament xifrat amb el resum que veus. Els streams del model de llenguatge de VS Code fan servir recuperació protegida quan un stream falla.
 
 ## Què pot fer Zoo Code per TU?
 
