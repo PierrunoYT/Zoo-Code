@@ -47,11 +47,11 @@ O Zoo Code aproveita a base criada pelo Roo Code e continua ampliando-a com:
 - **Workflows de terminal e edição mais confiáveis** — correções para encerramento prematuro do terminal, race conditions no estado das tarefas, gerenciamento de contexto, edição de diff e uso de ferramentas específicas de cada provider.
 - **Mais controle sobre seu workspace** — gerenciamento de regras, restrições de MCP por modo, controles de caminhos multi-root, opções de reasoning dos modelos e ações para revisar alterações ao concluir uma tarefa.
 
-## Novidades na v3.84.0
+## Novidades na v3.90.0
 
-- ✨ **Novos modelos SOTA adicionados:** Use GPT-6 Sol, GPT-6 Luna e Claude Opus 5.5 nos providers compatíveis.
-- 🧭 **Tarefas e subtarefas mais confiáveis:** Mantenha os modos delegados isolados, preserve os links das subtarefas após interrupções repetidas e proteja as configurações do orquestrador quando comandos com barra alternarem o modo.
-- 🛠️ **Comportamento mais confiável do terminal, dos providers e da busca de código:** Melhore o terminal no Windows e em ambientes que não usam inglês, fortaleça as respostas e o cancelamento dos providers e faça a busca de código usar o workspace correto com mais consistência.
+- ✨ **Provedores e modelos:** O GitHub Copilot agora é um provedor: entre e o Zoo Code carrega seus modelos do Copilot. O IO Intelligence é um provedor com a própria chave de API. O Gemini 4 Argon está no Gemini e no Vertex. O GPT-6 Luna está no OpenCode Go. O Gemini 4 Argon e o GPT-6 Luna também estão no Zoo Gateway.
+- 🧭 **Execução de ferramentas:** Repetir a mesma chamada de ferramenta gera um aviso e depois o Zoo Code para esse loop. Desativar `attempt_completion` não deixa mais uma tarefa sem conseguir terminar. Mensagens na fila passam pelas mesmas verificações de proteção de comandos que os comandos enviados diretamente.
+- ⚡ **Raciocínio e streaming:** O pensamento adaptativo da Anthropic aparece no chat e os thinking tokens são contados. O botão R1 mantém o raciocínio do llama.cpp, Ollama e LM Studio. O Codex mantém o raciocínio criptografado junto com o resumo que você vê. Os streams de modelo de linguagem do VS Code usam guarded recovery quando um stream falha.
 
 ## O que o Zoo Code pode fazer por VOCÊ?
 
