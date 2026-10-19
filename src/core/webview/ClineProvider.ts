@@ -2449,6 +2449,11 @@ export class ClineProvider
 			return historyItem
 		}
 
+		// A live Task owns this history and would re-add checkpoint rows or rewrite its workspace after a reset.
+		if (this.isTaskLiveInAnyProvider(historyItem.id)) {
+			return historyItem
+		}
+
 		const useCurrentWorkspace = { title: "Use Current Workspace" }
 		const openOriginalWorkspace = { title: "Open Original Workspace" }
 		const selection = await vscode.window.showWarningMessage(
@@ -2470,18 +2475,62 @@ export class ClineProvider
 			return undefined
 		}
 
+		// The modal has no timeout, so the task may have been opened elsewhere while it was shown.
+		if (this.isTaskLiveInAnyProvider(historyItem.id)) {
+			this.log(`[prepareHistoryItemForResume] Task ${historyItem.id} became live during workspace selection`)
+			return undefined
+		}
+
 		const updatedHistoryItem = { ...historyItem, workspace: currentWorkspace }
-		await this.resetTaskCheckpointsForWorkspaceChange(historyItem, updatedHistoryItem)
-		return updatedHistoryItem
+		const persisted = await this.resetTaskCheckpointsForWorkspaceChange(historyItem, updatedHistoryItem)
+		// Resume from the record as persisted now, not the snapshot read before the prompt.
+		return { ...historyItem, ...persisted, workspace: currentWorkspace }
+	}
+
+	private isTaskLiveInAnyProvider(taskId: string): boolean {
+		return ClineProvider.getAllInstances().some((provider) => provider.taskRegistry.getById(taskId) !== undefined)
+	}
+
+	/**
+	 * Persist only `workspace`, read-modify-writing the stored record so fields that changed meanwhile
+	 * (status, pendingAction, ...) are never overwritten from a stale snapshot. With `expectedWorkspace`,
+	 * the stored record is left unchanged unless it still has that workspace.
+	 */
+	private async setTaskHistoryWorkspace(
+		historyItem: HistoryItem,
+		workspace: string | undefined,
+		expectedWorkspace?: string,
+	): Promise<HistoryItem | undefined> {
+		const taskId = historyItem.id
+		if (!this.taskHistoryStore.get(taskId)) {
+			// Legacy fallback before the store is initialized: there is no stored record to preserve.
+			if (expectedWorkspace !== undefined) return undefined
+			await this.updateTaskHistory({ ...historyItem, workspace })
+			return this.taskHistoryStore.get(taskId)
+		}
+
+		let changed = false
+		await this.taskHistoryStore.atomicReadAndUpdate(taskId, (current) => {
+			if (expectedWorkspace !== undefined && current.workspace !== expectedWorkspace) return current
+			changed = current.workspace !== workspace
+			return { ...current, workspace }
+		})
+		this.recentTasksCache = undefined
+		const updated = this.taskHistoryStore.get(taskId)
+		if (changed && updated && this.isViewLaunched) {
+			await this.postMessageToWebview({ type: "taskHistoryItemUpdated", taskHistoryItem: updated })
+		}
+		return updated
 	}
 
 	private async resetTaskCheckpointsForWorkspaceChange(
 		originalHistoryItem: HistoryItem,
 		updatedHistoryItem: HistoryItem,
-	): Promise<void> {
+	): Promise<HistoryItem | undefined> {
 		const taskId = originalHistoryItem.id
 		const globalStoragePath = this.contextProxy.globalStorageUri.fsPath
 		let removedCheckpoints: ClineMessage[] = []
+		let persisted: HistoryItem | undefined
 		const taskDir = await getTaskDirectoryPath(globalStoragePath, taskId)
 		const checkpointsDir = path.join(taskDir, "checkpoints")
 		const checkpointBackupDir = path.join(taskDir, `checkpoints.workspace-change-${crypto.randomUUID()}`)
@@ -2507,7 +2556,7 @@ export class ClineProvider
 					return messages.filter((message) => !removedCheckpoints.includes(message))
 				},
 			})
-			await this.updateTaskHistory(updatedHistoryItem)
+			persisted = await this.setTaskHistoryWorkspace(originalHistoryItem, updatedHistoryItem.workspace)
 		} catch (error) {
 			if (removedCheckpoints.length > 0) {
 				try {
@@ -2529,9 +2578,12 @@ export class ClineProvider
 				}
 			}
 			try {
-				if (this.taskHistoryStore.get(taskId)?.workspace === updatedHistoryItem.workspace) {
-					await this.updateTaskHistory(originalHistoryItem)
-				}
+				// Revert only the workspace, and only if no newer write has moved it again.
+				await this.setTaskHistoryWorkspace(
+					originalHistoryItem,
+					originalHistoryItem.workspace,
+					updatedHistoryItem.workspace,
+				)
 			} catch (rollbackError) {
 				this.log(
 					`[resetTaskCheckpointsForWorkspaceChange] Failed to restore history for ${taskId}: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`,
@@ -2553,6 +2605,8 @@ export class ClineProvider
 				}
 			}
 		}
+
+		return persisted
 	}
 
 	async exportTaskWithId(id: string) {
