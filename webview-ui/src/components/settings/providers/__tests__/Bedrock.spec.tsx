@@ -142,16 +142,13 @@ describe("Bedrock Component", () => {
 		expect(!!screen.queryByRole("button", { name: "settings:providers.awsCatalogRefresh" })).toBe(visible)
 	})
 
-	it("selects a discovered ARN into the edit buffer without saving or enabling routing", () => {
-		render(
-			<Bedrock
-				apiConfiguration={{ awsRegion: "eu-west-3" }}
-				setApiConfigurationField={mockSetApiConfigurationField}
-			/>,
-		)
+	const discoveredArn = "arn:aws:bedrock:eu-west-3:123456789012:inference-profile/eu.model"
+
+	const selectDiscoveredArn = (apiConfiguration: ProviderSettings) => {
+		render(<Bedrock apiConfiguration={apiConfiguration} setApiConfigurationField={mockSetApiConfigurationField} />)
 		fireEvent.click(screen.getByRole("button", { name: "settings:providers.awsCatalogRefresh" }))
 		const request = vi.mocked(vscode.postMessage).mock.calls[0][0]
-		const arn = "arn:aws:bedrock:eu-west-3:123456789012:inference-profile/eu.model"
+		const arn = discoveredArn
 		act(() =>
 			window.dispatchEvent(
 				new MessageEvent("message", {
@@ -165,11 +162,28 @@ describe("Bedrock Component", () => {
 		)
 		const catalogSelect = screen.getByRole("option", { name: /Discovered/ }).closest("select")!
 		fireEvent.change(catalogSelect, { target: { value: arn } })
+	}
+
+	it("selects a discovered ARN into the edit buffer without saving or enabling routing", () => {
+		selectDiscoveredArn({ awsRegion: "eu-west-3", awsCustomArnBaseModelId: "other", modelMaxTokens: 8192 })
+
+		// A new ARN starts from detection again, matching manual ARN entry.
 		expect(mockSetApiConfigurationField.mock.calls).toEqual([
 			["apiModelId", "custom-arn"],
-			["awsCustomArn", arn],
+			["awsCustomArn", discoveredArn],
+			["awsCustomArnBaseModelId", ""],
+			["modelMaxTokens", undefined],
+			["modelMaxThinkingTokens", undefined],
+			["reasoningEffort", undefined],
+			["awsModelContextWindow", undefined],
 		])
 		expect(vscode.postMessage).toHaveBeenCalledTimes(1)
+	})
+
+	it("keeps the underlying model choice when the current ARN is selected again", () => {
+		selectDiscoveredArn({ awsRegion: "eu-west-3", awsCustomArn: discoveredArn, awsCustomArnBaseModelId: "other" })
+
+		expect(mockSetApiConfigurationField.mock.calls).toEqual([["apiModelId", "custom-arn"]])
 	})
 
 	it.each(["awsGlobalInference", "awsCrossRegion"])("buffers explicit routing opt-in: %s", (label) => {

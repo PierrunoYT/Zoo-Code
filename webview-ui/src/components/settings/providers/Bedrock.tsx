@@ -260,7 +260,14 @@ export const Bedrock = ({
 					apiConfiguration={apiConfiguration}
 					onSelect={(arn) => {
 						setApiConfigurationField("apiModelId", "custom-arn")
+						if (arn === apiConfiguration.awsCustomArn) return
+						// Like typing a new ARN: the underlying model and limits belong to the previous ARN.
 						setApiConfigurationField("awsCustomArn", arn)
+						setApiConfigurationField("awsCustomArnBaseModelId", "")
+						setApiConfigurationField("modelMaxTokens", undefined)
+						setApiConfigurationField("modelMaxThinkingTokens", undefined)
+						setApiConfigurationField("reasoningEffort", undefined)
+						setApiConfigurationField("awsModelContextWindow", undefined)
 					}}
 				/>
 			)}
