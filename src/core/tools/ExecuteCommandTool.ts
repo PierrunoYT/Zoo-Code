@@ -1,3 +1,4 @@
+import { markToolRejected } from "../task/toolExecutionContext"
 import fs from "fs/promises"
 import { constants as fsConstants } from "fs"
 import * as path from "path"
@@ -114,7 +115,7 @@ export class ExecuteCommandTool extends BaseTool<"execute_command"> {
 
 	async execute(params: ExecuteCommandParams, task: Task, callbacks: ToolCallbacks): Promise<void> {
 		const { command, cwd: customCwd, timeout: timeoutSeconds } = params
-		const { handleError, pushToolResult, askApproval } = callbacks
+		const { handleError, pushToolResult, askApproval, toolCallId } = callbacks
 
 		try {
 			if (!command) {
@@ -332,13 +333,14 @@ export class ExecuteCommandTool extends BaseTool<"execute_command"> {
 				terminalShellIntegrationDisabled,
 				commandExecutionTimeout,
 				agentTimeout,
+				toolCallId,
 			}
 
 			try {
 				const [rejected, result] = await executeCommandInTerminal(task, options)
 
 				if (rejected) {
-					task.didRejectTool = true
+					markToolRejected(task, toolCallId)
 				}
 
 				pushToolResult(result)
@@ -357,7 +359,7 @@ export class ExecuteCommandTool extends BaseTool<"execute_command"> {
 					})
 
 					if (rejected) {
-						task.didRejectTool = true
+						markToolRejected(task, toolCallId)
 					}
 
 					pushToolResult(result)
@@ -395,6 +397,7 @@ export type ExecuteCommandOptions = {
 	terminalShellIntegrationDisabled?: boolean
 	commandExecutionTimeout?: number
 	agentTimeout?: number
+	toolCallId: string
 }
 
 export async function executeCommandInTerminal(
@@ -406,6 +409,7 @@ export async function executeCommandInTerminal(
 		terminalShellIntegrationDisabled = true,
 		commandExecutionTimeout = 0,
 		agentTimeout = 0,
+		toolCallId,
 	}: ExecuteCommandOptions,
 ): Promise<[boolean, ToolResponse]> {
 	// Convert milliseconds back to seconds for display purposes.
@@ -418,6 +422,7 @@ export async function executeCommandInTerminal(
 	} else {
 		workingDir = path.resolve(task.cwd, customCwd)
 	}
+
 	const workingDirectoryError = await commandWorkingDirectoryError(workingDir)
 	if (workingDirectoryError) {
 		return [false, workingDirectoryError]
@@ -604,7 +609,7 @@ export async function executeCommandInTerminal(
 	}
 
 	const process = terminal.runCommand(command, callbacks)
-	task.terminalProcess = process
+	task.terminalProcesses.set(toolCallId, process)
 
 	// Dual-timeout logic:
 	// - Agent timeout: transitions the command to background (continues running)
@@ -638,7 +643,7 @@ export async function executeCommandInTerminal(
 				new Promise<void>((_, reject) => {
 					userTimeoutId = setTimeout(() => {
 						isUserTimedOut = true
-						task.terminalProcess?.abort()
+						process.abort()
 						reject(new Error(`Command execution timed out after ${commandExecutionTimeout}ms`))
 					}, commandExecutionTimeout)
 				}),
@@ -652,8 +657,6 @@ export async function executeCommandInTerminal(
 			postCommandExecutionStatus(provider, status)
 			await task.say("error", t("common:errors:command_timeout", { seconds: commandExecutionTimeoutSeconds }))
 			task.didToolFailInCurrentTurn = true
-			task.terminalProcess = undefined
-
 			return [
 				false,
 				`The command was terminated after exceeding a user-configured ${commandExecutionTimeoutSeconds}s timeout. Do not try to re-run the command.`,
@@ -664,7 +667,7 @@ export async function executeCommandInTerminal(
 		clearTimeout(agentTimeoutId)
 		clearTimeout(userTimeoutId)
 		clearTimeout(pendingCommandOutputEmitTimer)
-		task.terminalProcess = undefined
+		task.terminalProcesses.delete(toolCallId)
 	}
 
 	if (shellIntegrationError) {

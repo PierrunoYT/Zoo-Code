@@ -108,6 +108,7 @@ describe("executeCommandTool", () => {
 			recordToolUsage: vitest.fn().mockReturnValue({} as ToolUsage),
 			recordToolError: vitest.fn(),
 			supersedePendingAsk: vitest.fn(),
+			terminalProcesses: new Map(),
 			recordBlanketCommandDenial: vitest.fn(),
 			providerRef: {
 				deref: vitest.fn().mockResolvedValue({
@@ -134,7 +135,7 @@ describe("executeCommandTool", () => {
 
 		// Setup vscode config mock
 		const mockConfig = {
-			get: vitest.fn().mockImplementation((key: string, defaultValue: any) => {
+			get: vitest.fn().mockImplementation((_key: string, defaultValue: any) => {
 				return defaultValue
 			}),
 		}
@@ -201,6 +202,7 @@ describe("executeCommandTool", () => {
 				askApproval: mockAskApproval as unknown as AskApproval,
 				handleError: mockHandleError as unknown as HandleError,
 				pushToolResult: mockPushToolResult as unknown as PushToolResult,
+				toolCallId: "test-tool-call-id",
 			})
 
 			// Verify
@@ -222,6 +224,7 @@ describe("executeCommandTool", () => {
 				askApproval: mockAskApproval as unknown as AskApproval,
 				handleError: mockHandleError as unknown as HandleError,
 				pushToolResult: mockPushToolResult as unknown as PushToolResult,
+				toolCallId: "test-tool-call-id",
 			})
 
 			// Verify - command approved, result pushed, and custom cwd passed to terminal
@@ -243,6 +246,7 @@ describe("executeCommandTool", () => {
 				askApproval: mockAskApproval as unknown as AskApproval,
 				handleError: mockHandleError as unknown as HandleError,
 				pushToolResult: mockPushToolResult as unknown as PushToolResult,
+				toolCallId: "test-tool-call-id",
 			})
 
 			expect(provider.postMessageToWebview).toHaveBeenCalledWith(
@@ -287,6 +291,7 @@ describe("executeCommandTool", () => {
 				askApproval: mockAskApproval as unknown as AskApproval,
 				handleError: mockHandleError as unknown as HandleError,
 				pushToolResult: mockPushToolResult as unknown as PushToolResult,
+				toolCallId: "test-tool-call-id",
 			})
 
 			expect(provider.postMessageToWebview).toHaveBeenCalledWith(
@@ -330,6 +335,7 @@ describe("executeCommandTool", () => {
 				askApproval: mockAskApproval as unknown as AskApproval,
 				handleError: mockHandleError as unknown as HandleError,
 				pushToolResult: mockPushToolResult as unknown as PushToolResult,
+				toolCallId: "test-tool-call-id",
 			})
 
 			expect(mockCline.say).toHaveBeenCalledWith(
@@ -353,6 +359,7 @@ describe("executeCommandTool", () => {
 				askApproval: mockAskApproval as unknown as AskApproval,
 				handleError: mockHandleError as unknown as HandleError,
 				pushToolResult: mockPushToolResult as unknown as PushToolResult,
+				toolCallId: "test-tool-call-id",
 			})
 
 			// The DCG verdict is forwarded so checkAutoApproval auto-approves from
@@ -381,6 +388,7 @@ describe("executeCommandTool", () => {
 				askApproval: mockAskApproval as unknown as AskApproval,
 				handleError: mockHandleError as unknown as HandleError,
 				pushToolResult: mockPushToolResult as unknown as PushToolResult,
+				toolCallId: "test-tool-call-id",
 			})
 
 			// Blanket mode: not protected, so checkAutoApproval resolves the ask as
@@ -408,6 +416,7 @@ describe("executeCommandTool", () => {
 				askApproval: mockAskApproval as unknown as AskApproval,
 				handleError: mockHandleError as unknown as HandleError,
 				pushToolResult: mockPushToolResult as unknown as PushToolResult,
+				toolCallId: "test-tool-call-id",
 			})
 
 			expect(mockAskApproval).toHaveBeenCalledWith("command", "echo test", undefined, true)
@@ -431,6 +440,7 @@ describe("executeCommandTool", () => {
 				askApproval: mockAskApproval as unknown as AskApproval,
 				handleError: mockHandleError as unknown as HandleError,
 				pushToolResult: mockPushToolResult as unknown as PushToolResult,
+				toolCallId: "test-tool-call-id",
 			})
 
 			expect(mockAskApproval).toHaveBeenCalledWith("command", "echo test", undefined, true)
@@ -458,6 +468,7 @@ describe("executeCommandTool", () => {
 				handleError: mockHandleError as unknown as HandleError,
 				// vi.fn stands in for the PushToolResult signature; every test in this block uses this identical cast.
 				pushToolResult: mockPushToolResult as unknown as PushToolResult,
+				toolCallId: "test-tool-call-id",
 			})
 
 			expect(mockAskApproval).toHaveBeenCalledWith("command", "echo test", undefined, true)
@@ -498,6 +509,7 @@ describe("executeCommandTool", () => {
 				askApproval: mockAskApproval,
 				handleError: mockHandleError,
 				pushToolResult: mockPushToolResult,
+				toolCallId: "test-tool-call-id",
 			})
 
 			// Position pin: the denial must arrive after an ask actually happened —
@@ -548,6 +560,7 @@ describe("executeCommandTool", () => {
 				askApproval: mockAskApproval,
 				handleError: mockHandleError,
 				pushToolResult: mockPushToolResult,
+				toolCallId: "test-tool-call-id",
 			})
 
 			// Same position pin as the sibling test: asked first, denied by the re-check.
@@ -603,6 +616,7 @@ describe("executeCommandTool", () => {
 				askApproval: mockAskApproval,
 				handleError: mockHandleError,
 				pushToolResult: mockPushToolResult,
+				toolCallId: "test-tool-call-id",
 			})
 
 			// The prompt shown was the protected one — the blanket setting was off
@@ -635,6 +649,7 @@ describe("executeCommandTool", () => {
 				askApproval: mockAskApproval,
 				handleError: mockHandleError,
 				pushToolResult: mockPushToolResult,
+				toolCallId: "test-tool-call-id",
 			})
 
 			expect(recheckSpy).toHaveBeenCalledTimes(1)
@@ -657,6 +672,7 @@ describe("executeCommandTool", () => {
 				askApproval: mockAskApproval,
 				handleError: mockHandleError,
 				pushToolResult: mockPushToolResult,
+				toolCallId: "test-tool-call-id",
 			})
 
 			expect(TerminalRegistry.getOrCreateTerminal).not.toHaveBeenCalled()
@@ -694,6 +710,7 @@ describe("executeCommandTool", () => {
 				askApproval: mockAskApproval,
 				handleError: mockHandleError,
 				pushToolResult: mockPushToolResult,
+				toolCallId: "test-tool-call-id",
 			})
 
 			// The re-check genuinely ran against the fresh state — without this
@@ -728,6 +745,7 @@ describe("executeCommandTool", () => {
 				askApproval: mockAskApproval as unknown as AskApproval,
 				handleError: mockHandleError as unknown as HandleError,
 				pushToolResult: mockPushToolResult as unknown as PushToolResult,
+				toolCallId: "test-tool-call-id",
 			})
 
 			expect(mockEnsureDcgInstalled).toHaveBeenCalledWith("/test/storage")
@@ -747,6 +765,7 @@ describe("executeCommandTool", () => {
 				askApproval: mockAskApproval as unknown as AskApproval,
 				handleError: mockHandleError as unknown as HandleError,
 				pushToolResult: mockPushToolResult as unknown as PushToolResult,
+				toolCallId: "test-tool-call-id",
 			})
 
 			expect(formatResponse.toolError).toHaveBeenCalledExactlyOnceWith(
@@ -771,6 +790,7 @@ describe("executeCommandTool", () => {
 				askApproval: mockAskApproval as unknown as AskApproval,
 				handleError: mockHandleError as unknown as HandleError,
 				pushToolResult: mockPushToolResult as unknown as PushToolResult,
+				toolCallId: "test-tool-call-id",
 			})
 
 			expect(fs.stat).toHaveBeenCalledWith("/remote/workspace/file.txt")
@@ -801,6 +821,7 @@ describe("executeCommandTool", () => {
 					askApproval: mockAskApproval as unknown as AskApproval,
 					handleError: mockHandleError as unknown as HandleError,
 					pushToolResult: mockPushToolResult as unknown as PushToolResult,
+					toolCallId: "test-tool-call-id",
 				})
 
 				expect(fs.access).toHaveBeenCalledWith("/remote/locked", fsConstants.X_OK)
@@ -835,6 +856,7 @@ describe("executeCommandTool", () => {
 					askApproval: mockAskApproval,
 					handleError: mockHandleError,
 					pushToolResult: mockPushToolResult,
+					toolCallId: "test-tool-call-id",
 				})
 
 				if (dcgEnabled) {
@@ -864,6 +886,7 @@ describe("executeCommandTool", () => {
 				askApproval: mockAskApproval as unknown as AskApproval,
 				handleError: mockHandleError as unknown as HandleError,
 				pushToolResult: mockPushToolResult as unknown as PushToolResult,
+				toolCallId: "test-tool-call-id",
 			})
 
 			expect(mockHandleError).toHaveBeenCalledWith(
@@ -889,6 +912,7 @@ describe("executeCommandTool", () => {
 				askApproval: mockAskApproval as unknown as AskApproval,
 				handleError: mockHandleError as unknown as HandleError,
 				pushToolResult: mockPushToolResult as unknown as PushToolResult,
+				toolCallId: "test-tool-call-id",
 			})
 
 			expect(mockHandleError).toHaveBeenCalledWith(
@@ -911,6 +935,7 @@ describe("executeCommandTool", () => {
 				askApproval: mockAskApproval as unknown as AskApproval,
 				handleError: mockHandleError as unknown as HandleError,
 				pushToolResult: mockPushToolResult as unknown as PushToolResult,
+				toolCallId: "test-tool-call-id",
 			})
 
 			// Verify
@@ -932,6 +957,7 @@ describe("executeCommandTool", () => {
 				askApproval: mockAskApproval as unknown as AskApproval,
 				handleError: mockHandleError as unknown as HandleError,
 				pushToolResult: mockPushToolResult as unknown as PushToolResult,
+				toolCallId: "test-tool-call-id",
 			})
 
 			// Verify
@@ -958,6 +984,7 @@ describe("executeCommandTool", () => {
 				askApproval: mockAskApproval as unknown as AskApproval,
 				handleError: mockHandleError as unknown as HandleError,
 				pushToolResult: mockPushToolResult as unknown as PushToolResult,
+				toolCallId: "test-tool-call-id",
 			})
 
 			// Verify
@@ -1091,6 +1118,7 @@ describe("executeCommandTool", () => {
 				askApproval: mockAskApproval as unknown as AskApproval,
 				handleError: mockHandleError as unknown as HandleError,
 				pushToolResult: mockPushToolResult as unknown as PushToolResult,
+				toolCallId: "test-tool-call-id",
 			})
 		}
 
