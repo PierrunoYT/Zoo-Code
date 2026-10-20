@@ -4208,6 +4208,7 @@ export class ClineProvider
 		// even when disposal cancels delegation after the commit.
 		let parentCommitted = false
 		let pendingActionBeforeCommit: HistoryItem["pendingAction"]
+		let parentBeforeCommit: HistoryItem | undefined
 		try {
 			if (this._disposed) {
 				throw new Error("[delegateParentAndOpenChild] Provider was disposed before delegation commit")
@@ -4223,6 +4224,7 @@ export class ClineProvider
 					: undefined
 				const delegated = delegateTaskToChild(historyItem, child.taskId, awaitedChildStatus)
 				pendingActionBeforeCommit = historyItem.pendingAction
+				parentBeforeCommit = historyItem
 				return {
 					...delegated,
 					pendingAction:
@@ -4300,6 +4302,15 @@ export class ClineProvider
 					await this.taskHistoryStore.atomicReadAndUpdate(parentTaskId, (current) => {
 						if (current.status !== "delegated" || current.awaitingChildId !== child.taskId) {
 							return current // A newer transition already owns the parent.
+						}
+						if (parentBeforeCommit?.status === "delegated" && parentBeforeCommit.awaitingChildId) {
+							// Re-delegation replaced an earlier interrupted child's link; restore it.
+							return {
+								...current,
+								awaitingChildId: parentBeforeCommit.awaitingChildId,
+								delegatedToId: parentBeforeCommit.delegatedToId,
+								pendingAction: pendingActionBeforeCommit,
+							}
 						}
 						const ancestor = current.parentTaskId
 							? this.taskHistoryStore.get(current.parentTaskId)
