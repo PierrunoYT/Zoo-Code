@@ -2512,6 +2512,13 @@ describe("Cline", () => {
 
 			it("surfaces a failed emergency condense as condense_context_error", async () => {
 				const { task, say } = await createOverflowingTask(providerStateWith())
+				// Enough visible messages for the 50% fallback to hide a pair (floor(4 * 0.5) = 2).
+				task.apiConversationHistory = ["a", "b", "c", "d", "e"].map((text, index) => ({
+					role: index % 2 === 0 ? ("user" as const) : ("assistant" as const),
+					content: [{ type: "text" as const, text }],
+					ts: index + 1,
+				}))
+				const overwrite = vi.mocked(task.overwriteApiConversationHistory)
 				vi.mocked(summarizeConversation).mockResolvedValueOnce({
 					messages: task.apiConversationHistory,
 					summary: "",
@@ -2527,6 +2534,21 @@ describe("Cline", () => {
 					"condense_context_error",
 					"sliding_window_truncation",
 				])
+
+				const truncatedHistory = requireDefined(overwrite.mock.calls.at(-1))[0]
+				const marker = requireDefined(truncatedHistory.find((message) => message.isTruncationMarker))
+				const truncationCall = requireDefined(
+					say.mock.calls.find(([type]) => type === "sliding_window_truncation"),
+				)
+				const reported = requireDefined(truncationCall[8])
+				expect(reported.truncationId).toBe(marker.truncationId)
+				expect(reported.messagesRemoved).toBe(2)
+				expect(
+					truncatedHistory.filter((message) => message.truncationParent === reported.truncationId),
+				).toHaveLength(2)
+				expect(reported.prevContextTokens).toBeGreaterThanOrEqual(100_000)
+				expect(reported.newContextTokens).toBeGreaterThan(0)
+				expect(reported.newContextTokens).toBeLessThan(reported.prevContextTokens)
 			})
 		})
 
