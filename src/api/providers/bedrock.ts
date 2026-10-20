@@ -1680,6 +1680,11 @@ Please check:
 	private formatErrorMessage(error: unknown, errorType: string, _isStreamContext: boolean): string {
 		const definition = AwsBedrockHandler.ERROR_TYPES[errorType] || AwsBedrockHandler.ERROR_TYPES.GENERIC
 		let template = definition.messageTemplate
+		if (errorType === "ON_DEMAND_NOT_SUPPORTED" && this.options.awsCustomArn) {
+			// A custom ARN bypasses the routing checkboxes, so only a different ARN can fix this.
+			template = `
+Select a geographic or global inference-profile ARN in the "Use custom ARN..." option of the model selector in settings. The cross-region and global inference settings do not apply to a custom ARN.`
+		}
 
 		// Prepare template variables
 		const templateVars: Record<string, string> = {}

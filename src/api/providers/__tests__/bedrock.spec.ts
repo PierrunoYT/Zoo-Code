@@ -116,6 +116,30 @@ describe("AwsBedrockHandler", () => {
 		},
 	)
 
+	it("directs a custom ARN to an inference-profile ARN, not the routing settings", async () => {
+		const provider = new AwsBedrockHandler({
+			awsCustomArn:
+				"arn:aws:bedrock:us-east-1:123456789012:foundation-model/anthropic.claude-3-5-sonnet-20241022-v2:0",
+			awsAccessKey: "test-access-key",
+			awsSecretKey: "test-secret-key",
+			awsRegion: "us-east-1",
+		})
+		provider["client"].send = vi
+			.fn()
+			.mockRejectedValue(new Error("Invocation with on-demand throughput isn't supported"))
+		const consume = async () => {
+			for await (const chunk of provider.createMessage("system", [{ role: "user", content: "hello" }])) {
+				void chunk
+			}
+		}
+		const error = await consume().then(
+			() => undefined,
+			(e: Error) => e,
+		)
+		expect(error?.message).toContain("inference-profile ARN")
+		expect(error?.message).not.toContain("Try enabling cross-region inference")
+	})
+
 	it("preserves a newly discovered foundation-model ID rather than invoking the default Claude model", () => {
 		const provider = new AwsBedrockHandler({
 			apiModelId: "custom-arn",
