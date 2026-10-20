@@ -338,17 +338,34 @@ describe.each([[RepoPerTaskCheckpointService, "RepoPerTaskCheckpointService"]])(
 					},
 				)
 
-				it.each(["missing", "blob"])("rejects a %s object before cleanup", async (kind) => {
+				it.each([
+					["missing", /could not get object info/i],
+					["blob", "Checkpoint hash does not identify a commit"],
+				] as const)("rejects a %s object before cleanup", async (kind, expectedError) => {
 					service.on("error", vitest.fn())
 					const git = service["git"]!
 					const hash = kind === "blob" ? await git.revparse(["HEAD:test.txt"]) : "a".repeat(40)
 					const read = vitest.spyOn(fs, "readFile")
 					const clean = vitest.spyOn(git, "clean")
 					const reset = vitest.spyOn(git, "reset")
-					await expect(service.restoreCheckpoint(hash)).rejects.toThrow()
+					await expect(service.restoreCheckpoint(hash)).rejects.toThrow(expectedError)
 					expect(read).not.toHaveBeenCalled()
 					expect(clean).not.toHaveBeenCalled()
 					expect(reset).not.toHaveBeenCalled()
+				})
+
+				it("still resets tracked files when removing an untracked file fails", async () => {
+					service.on("error", vitest.fn())
+					const checkpoint = await service.saveCheckpoint("tracked state", { allowEmpty: true })
+					await fs.writeFile(testFile, "modified")
+					const untracked = path.join(service.workspaceDir, "stuck-untracked.txt")
+					await fs.writeFile(untracked, "stuck")
+					const rm = vitest
+						.spyOn(fs, "rm")
+						.mockRejectedValue(Object.assign(new Error("busy"), { code: "EBUSY" }))
+					await service.restoreCheckpoint(checkpoint!.commit)
+					rm.mockRestore()
+					expect(await fs.readFile(testFile, "utf8")).toBe("Hello, world!")
 				})
 
 				it("records files ignored before initialization for a baseHash restore", async () => {
@@ -395,7 +412,13 @@ describe.each([[RepoPerTaskCheckpointService, "RepoPerTaskCheckpointService"]])(
 								.spyOn(fs, "readFile")
 								.mockRejectedValueOnce(Object.assign(new Error("denied"), { code: "EACCES" }))
 						}
-						await expect(service.restoreCheckpoint(checkpoint!.commit)).rejects.toThrow()
+						const expectedError = {
+							missing: /ENOENT|no such file/i,
+							truncated: SyntaxError,
+							invalid: "Invalid ignored-path record",
+							unreadable: "denied",
+						}[failure]
+						await expect(service.restoreCheckpoint(checkpoint!.commit)).rejects.toThrow(expectedError)
 						expect(await fs.readFile(testFile, "utf8")).toBe("must not reset")
 						expect(await fs.readFile(untracked, "utf8")).toBe("must not clean")
 					},
