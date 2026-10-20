@@ -4366,6 +4366,80 @@ describe("Cline", () => {
 		})
 	})
 
+	describe("partial message update throttling", () => {
+		function createStreamingTask() {
+			const task = new Task({
+				provider: mockProvider,
+				apiConfiguration: mockApiConfig,
+				task: "test task",
+				startTask: false,
+			})
+			vi.spyOn(getTaskTestAccess(task), "saveClineMessages").mockResolvedValue(true)
+			return task
+		}
+
+		const messageUpdates = () =>
+			vi
+				.mocked(mockProvider.postMessageToWebview)
+				.mock.calls.flatMap(([message]) =>
+					message.type === "messageUpdated" && message.clineMessage ? [message.clineMessage] : [],
+				)
+
+		beforeEach(() => {
+			vi.useFakeTimers()
+		})
+
+		afterEach(() => {
+			vi.useRealTimers()
+		})
+
+		it("coalesces a burst of partial updates and delivers the latest text last", async () => {
+			const task = createStreamingTask()
+
+			await task.say("text", "chunk 0", undefined, true)
+			for (let i = 1; i <= 50; i++) {
+				await task.say("text", `chunk ${i}`, undefined, true)
+				vi.advanceTimersByTime(5)
+			}
+			await vi.advanceTimersByTimeAsync(500)
+
+			const updates = messageUpdates()
+			// 50 deltas over ~250ms: far fewer than one post per delta.
+			expect(updates.length).toBeGreaterThan(0)
+			expect(updates.length).toBeLessThan(10)
+			expect(updates.at(-1)?.text).toBe("chunk 50")
+		})
+
+		it("lets the finalized message through and drops the queued partial post", async () => {
+			const task = createStreamingTask()
+
+			await task.say("text", "first", undefined, true)
+			await task.say("text", "second", undefined, true)
+			await task.say("text", "third", undefined, true)
+			// "third" is queued behind the throttle; finalizing must cancel that queued post.
+			expect(vi.getTimerCount()).toBe(1)
+			await task.say("text", "final text", undefined, false)
+			expect(vi.getTimerCount()).toBe(0)
+			await vi.advanceTimersByTimeAsync(500)
+
+			expect(messageUpdates().at(-1)).toMatchObject({ text: "final text", partial: false })
+		})
+
+		it("posts updates that are far enough apart immediately", async () => {
+			const task = createStreamingTask()
+
+			await task.say("text", "one", undefined, true)
+			await task.say("text", "two", undefined, true)
+			await vi.advanceTimersByTimeAsync(1000)
+			await task.say("text", "three", undefined, true)
+
+			// "two" is delivered by the trailing post; "three" goes out at once on the leading edge.
+			// (Posted messages are the same mutated object, so count posts rather than compare texts.)
+			expect(messageUpdates()).toHaveLength(2)
+			expect(messageUpdates().at(-1)?.text).toBe("three")
+		})
+	})
+
 	describe("abortTask", () => {
 		it("should set abort flag and emit TaskAborted event", async () => {
 			const task = new Task({
