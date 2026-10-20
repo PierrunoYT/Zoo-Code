@@ -2979,6 +2979,16 @@ describe("Cline", () => {
 					startTask: false,
 				})
 				vi.spyOn(getTaskTestAccess(cline), "getSystemPrompt").mockResolvedValue("mock system prompt")
+				// Image-capable model so the image block is kept in the outgoing request.
+				vi.spyOn(cline.api, "getModel").mockReturnValue({
+					id: "claude-3-sonnet",
+					info: {
+						supportsImages: true,
+						supportsPromptCache: false,
+						contextWindow: 200000,
+						maxTokens: 4096,
+					} as ModelInfo,
+				})
 				const mockStream = {
 					async *[Symbol.asyncIterator]() {
 						yield { type: "text", text: "response" }
@@ -3014,11 +3024,13 @@ describe("Cline", () => {
 
 				const [, sentHistory] = requireDefined(createMessageSpy.mock.calls[0])
 				const lastUserContent = requireDefined(sentHistory.at(-1)).content as Array<{ type: string }>
-				expect(lastUserContent.slice(0, 2)).toMatchObject([
-					{ type: "tool_result", tool_use_id: "read" },
-					{ type: "tool_result", tool_use_id: "cmd" },
+				// Both results lead, followed by the image and the environment details, none lost.
+				expect(lastUserContent).toEqual([
+					{ type: "tool_result", tool_use_id: "read", content: "File: logo.jpg" },
+					{ type: "tool_result", tool_use_id: "cmd", content: "Exit code: 0" },
+					{ type: "image", source: { type: "base64", media_type: "image/jpeg", data: "abc" } },
+					{ type: "text", text: "<environment_details>" },
 				])
-				expect(lastUserContent.slice(2).some((block) => block.type === "tool_result")).toBe(false)
 				// The stored history keeps its original shape.
 				expect(requireDefined(cline.apiConversationHistory.at(-1)).content).toMatchObject([
 					{ type: "tool_result" },
