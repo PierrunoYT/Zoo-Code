@@ -3983,6 +3983,10 @@ export class ClineProvider
 				return recoverDeadDelegatedChild(parent, currentChild)
 			})
 			const recovered = this.taskHistoryStore.get(childId)
+			this.recentTasksCache = undefined
+			if (recovered && this.isViewLaunched) {
+				await this.postMessageToWebview({ type: "taskHistoryItemUpdated", taskHistoryItem: recovered })
+			}
 			this.log(
 				`[delegateParentAndOpenChild] Recovered dead delegated child ${childId} as interrupted before re-delegation`,
 			)
@@ -4143,15 +4147,7 @@ export class ClineProvider
 			)
 		}
 
-		if (this._disposed) {
-			throw new Error("[delegateParentAndOpenChild] Provider was disposed during delegation")
-		}
-		if (parent.abort || parent.abandoned) {
-			throw new Error(`[delegateParentAndOpenChild] Parent ${parent.taskId} was cancelled during delegation`)
-		}
-		if (this.getCurrentTask() !== parent) {
-			throw new Error(`[delegateParentAndOpenChild] Parent ${parent.taskId} is no longer current`)
-		}
+		assertDelegationPreconditions()
 
 		// 3) Enforce single-open invariant by closing/disposing the parent first
 		//    This ensures we never have >1 tasks open at any time during delegation.

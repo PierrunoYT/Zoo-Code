@@ -929,10 +929,14 @@ describe("ClineProvider.delegateParentAndOpenChild()", () => {
 			if (id === oldChildId) cache.set(id, refreshedChild)
 			if (id === grandchildId) cache.set(id, refreshedGrandchild)
 		})
+		const postMessageToWebview = vi.fn()
 		const provider = {
 			taskRegistry: { hasRunning: vi.fn().mockReturnValue(false) },
 			taskHistoryStore,
 			log: vi.fn(),
+			isViewLaunched: true,
+			recentTasksCache: [],
+			postMessageToWebview,
 		} as unknown as ClineProvider
 		Object.assign(provider, {
 			isTaskRunningInAnyProvider: ClineProvider.prototype["isTaskRunningInAnyProvider"],
@@ -944,6 +948,12 @@ describe("ClineProvider.delegateParentAndOpenChild()", () => {
 		expect(taskHistoryStore.refreshStrict).toHaveBeenCalledWith(oldChildId)
 		expect(taskHistoryStore.refreshStrict).toHaveBeenCalledWith(grandchildId)
 		expect(cache.get(oldChildId)).toMatchObject({ status: "interrupted", awaitingChildId: undefined })
+		// The webview must not keep showing the recovered child as delegated.
+		expect(postMessageToWebview).toHaveBeenCalledWith({
+			type: "taskHistoryItemUpdated",
+			taskHistoryItem: cache.get(oldChildId),
+		})
+		expect(provider["recentTasksCache"]).toBeUndefined()
 	})
 
 	it("fails closed when a descendant record cannot be read during recovery", async () => {
