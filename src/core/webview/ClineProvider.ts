@@ -4131,11 +4131,34 @@ export class ClineProvider
 				await ClineProvider.prototype.drainTaskDisposal.call(this, child)
 				const parentHistory = this.taskHistoryStore.get(parentTaskId)
 				if (parentHistory?.awaitingChildId === child.taskId) {
-					await this.taskHistoryStore.atomicReadAndUpdate(child.taskId, (historyItem) =>
-						historyItem.status === "active"
-							? interruptDelegatedChild(parentHistory, historyItem)
-							: historyItem,
-					)
+					try {
+						if (this.taskHistoryStore.get(child.taskId)) {
+							await this.taskHistoryStore.atomicReadAndUpdate(child.taskId, (historyItem) =>
+								historyItem.status === "active"
+									? interruptDelegatedChild(parentHistory, historyItem)
+									: historyItem,
+							)
+						} else {
+							// The child was deleted concurrently; release the parent through the abandon
+							// transition. Only id and status of the stand-in child are read.
+							await this.taskHistoryStore.atomicReadAndUpdate(parentTaskId, (current) =>
+								current.status === "delegated" && current.awaitingChildId === child.taskId
+									? abandonDelegatedChild(current, {
+											...current,
+											id: child.taskId,
+											status: "interrupted",
+										}).parent
+									: current,
+							)
+						}
+					} catch (cleanupError) {
+						// Never let a cleanup failure replace the cancellation error.
+						this.log(
+							`[delegateParentAndOpenChild] Failed to repair cancelled handoff ${parentTaskId} -> ${child.taskId}: ${
+								(cleanupError as Error)?.message ?? String(cleanupError)
+							}`,
+						)
+					}
 				}
 				throw err
 			}

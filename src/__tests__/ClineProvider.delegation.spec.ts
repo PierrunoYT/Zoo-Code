@@ -159,6 +159,65 @@ describe("ClineProvider.delegateParentAndOpenChild()", () => {
 		} else expect(records.has("child-1")).toBe(false)
 	})
 
+	it("releases the parent and rethrows the cancellation when the committed child was deleted", async () => {
+		const parent = makeParentTask()
+		const child = {
+			taskId: "child-1",
+			abort: false,
+			abandoned: false,
+			run: vi.fn(),
+			dispose: vi.fn().mockResolvedValue(undefined),
+		}
+		let current: { taskId: string } | undefined = parent
+		const records = new Map<string, HistoryItem>([["parent-1", { ...parentHistoryItem, status: "interrupted" }]])
+		const store = {
+			invalidate: vi.fn().mockResolvedValue(undefined),
+			get: (id: string) => records.get(id),
+			atomicReadAndUpdate: vi.fn(async (id: string, update: (item: HistoryItem) => HistoryItem) => {
+				const item = records.get(id)
+				if (!item) throw new Error(`missing ${id}`)
+				records.set(id, update(item))
+				if (id === "parent-1") child.abort = true
+				return [...records.values()]
+			}),
+		}
+		const provider = makeProviderStub({
+			taskHistoryStore: store,
+			taskScheduler: { schedule: vi.fn() },
+			createTask: vi.fn(async () => {
+				current = child
+				records.set(child.taskId, {
+					...parentHistoryItem,
+					id: child.taskId,
+					status: "active",
+					parentTaskId: "parent-1",
+				})
+				return child
+			}),
+			createTaskWithHistoryItem: vi.fn(),
+			getCurrentTask: () => current,
+			isViewLaunched: true,
+			emit: vi.fn(),
+			postMessageToWebview: vi.fn(),
+			deleteTaskWithId: vi.fn(),
+			// A concurrent deleteTaskWithId removes the child while the handoff unwinds.
+			removeClineFromStack: vi.fn(async () => {
+				if (current === child) records.delete(child.taskId)
+				current = undefined
+			}),
+		})
+
+		await expect(
+			ClineProvider.prototype.delegateParentAndOpenChild.call(provider, {
+				parentTaskId: "parent-1",
+				message: "Child",
+				initialTodos: [],
+				mode: "code",
+			}),
+		).rejects.toThrow(/cancelled/)
+		expect(records.get("parent-1")).toMatchObject({ status: "active", awaitingChildId: undefined })
+	})
+
 	it("stops before delegation when refreshing the interrupted task's owner fails", async () => {
 		const parentTask = makeParentTask()
 		const historyItem: HistoryItem = {
