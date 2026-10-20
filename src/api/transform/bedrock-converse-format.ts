@@ -27,14 +27,15 @@ interface BedrockMessageContent {
 /**
  * Convert Anthropic messages to Bedrock Converse format
  * @param anthropicMessages Messages in Anthropic format
- * @param options.preserveReasoning Replay reasoning/thinking blocks as `reasoningContent`.
+ * @param options.preserveReasoning Replay reasoning/thinking blocks as `reasoningContent` while a tool loop
+ *   continues; reasoning followed by a new user message is dropped.
  *   Otherwise they are dropped, matching Task's stripping for models without `preserveReasoning`.
  */
 export function convertToBedrockConverseMessages(
 	anthropicMessages: Anthropic.Messages.MessageParam[],
 	{ preserveReasoning = false }: { preserveReasoning?: boolean } = {},
 ): Message[] {
-	return anthropicMessages.map((anthropicMessage) => {
+	return anthropicMessages.map((anthropicMessage, index) => {
 		// Map Anthropic roles to Bedrock roles
 		const role: ConversationRole = anthropicMessage.role === "assistant" ? "assistant" : "user"
 
@@ -52,12 +53,19 @@ export function convertToBedrockConverseMessages(
 		// Signed thinking blocks (e.g. from MiniMax) bypass Task's reasoning filter, so they can reach
 		// any Bedrock model after a provider switch. Unsigned reasoning is only safe for models that
 		// opt in; Claude would receive thinking it cannot verify.
-		const blocks = preserveReasoning
-			? anthropicMessage.content
-			: anthropicMessage.content.filter((block) => {
-					const type = (block as { type: string }).type
-					return type !== "reasoning" && type !== "thinking"
-				})
+		// Reasoning continuity only spans a tool loop: a following new user message ends it.
+		const next = anthropicMessages[index + 1]
+		const endsAtNewUserMessage =
+			next?.role === "user" &&
+			(typeof next.content === "string" ||
+				!next.content.some((block) => (block as { type: string }).type === "tool_result"))
+		const blocks =
+			preserveReasoning && !endsAtNewUserMessage
+				? anthropicMessage.content
+				: anthropicMessage.content.filter((block) => {
+						const type = (block as { type: string }).type
+						return type !== "reasoning" && type !== "thinking"
+					})
 
 		// Process complex content types
 		const content = blocks.map((block) => {

@@ -184,15 +184,17 @@ describe("AwsBedrockHandler", () => {
 				content: [
 					{ type: "thinking", thinking: "Signed by MiniMax.", signature: "minimax-signature" },
 					{ type: "text", text: "Done." },
+					{ type: "tool_use", id: "t1", name: "read_file", input: {} },
 				],
 			},
-			{ role: "user", content: "next" },
+			{ role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: "ok" }] },
 		] as Anthropic.Messages.MessageParam[]
 		await collectStream(provider.createMessage("system", history))
 		const [{ messages }] = mockConverseStreamCommand.mock.lastCall!
 		expect(messages?.[1].content).toStrictEqual([
 			...(kept ? [{ reasoningContent: { reasoningText: { text: "Signed by MiniMax." } } }] : []),
 			{ text: "Done." },
+			{ toolUse: { toolUseId: "t1", name: "read_file", input: {} } },
 		])
 	})
 

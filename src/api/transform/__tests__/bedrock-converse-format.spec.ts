@@ -50,6 +50,21 @@ describe("convertToBedrockConverseMessages", () => {
 		])
 	})
 
+	it("replays reasoning into a tool_result continuation but drops it before a new user message", () => {
+		const reasoning = { type: "reasoning", text: "Plan.", summary: [] }
+		const messages = [
+			{ role: "assistant", content: [reasoning, { type: "tool_use", id: "t1", name: "read", input: {} }] },
+			{ role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: "ok" }] },
+			{ role: "assistant", content: [reasoning, { type: "text", text: "Done." }] },
+			{ role: "user", content: [{ type: "text", text: "next" }] },
+		] as unknown as Anthropic.Messages.MessageParam[]
+
+		const result = convertToBedrockConverseMessages(messages, { preserveReasoning: true })
+
+		expect(result[0].content?.[0]).toEqual({ reasoningContent: { reasoningText: { text: "Plan." } } })
+		expect(result[2].content).toEqual([{ text: "Done." }])
+	})
+
 	it("drops reasoning and thinking blocks for models that do not preserve reasoning", () => {
 		// Signed thinking bypasses Task's reasoning filter, so the converter must not send it to e.g. Claude.
 		const messages = [
