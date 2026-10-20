@@ -575,7 +575,8 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 	}
 
 	/**
-	 * Push a tool_result block to userMessageContent, preventing duplicates.
+	 * Push a tool_result block to userMessageContent after any existing tool_results
+	 * (ahead of images and text), preventing duplicates.
 	 * Duplicate tool_use_ids cause API errors.
 	 *
 	 * @param toolResult - The tool_result block to add
@@ -592,7 +593,10 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 			)
 			return false
 		}
-		this.userMessageContent.push(toolResult)
+		// Keep results contiguous at the front: with parallel tool calls, an earlier tool's
+		// images or text are already queued, and Anthropic needs every tool_result first.
+		const lastResultIndex = findLastIndex(this.userMessageContent, (block) => block.type === "tool_result")
+		this.userMessageContent.splice(lastResultIndex + 1, 0, toolResult)
 		return true
 	}
 
