@@ -6,9 +6,13 @@
  * dialect it is writing for. Returns undefined for POSIX shells, where the shell
  * path already names the dialect.
  */
-export function describeShellDialect(shellPath: string): string | undefined {
+export function getShellName(shellPath: string): string {
 	// path.basename follows the host platform; split on both separators so Windows paths work anywhere.
-	const name = (shellPath.split(/[\\/]/).pop() ?? "").toLowerCase()
+	return shellPath.split(/[\\/]/).pop() ?? ""
+}
+
+export function describeShellDialect(shellPath: string): string | undefined {
+	const name = getShellName(shellPath).toLowerCase()
 
 	if (name === "cmd.exe" || name === "cmd") {
 		return (
