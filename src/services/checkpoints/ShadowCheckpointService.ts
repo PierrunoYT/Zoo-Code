@@ -339,7 +339,12 @@ export abstract class ShadowCheckpointService extends EventEmitter {
 				continue
 			}
 			const absPath = path.join(this.workspaceDir, relPath)
-			await fs.rm(absPath, { force: true, recursive: relPath.endsWith("/") })
+			// A per-entry failure must not abort restore before `git reset --hard` runs.
+			await fs.rm(absPath, { force: true, recursive: relPath.endsWith("/") }).catch((error: unknown) => {
+				this.log(
+					`[${this.constructor.name}#removeUntrackedFiles] failed to remove ${relPath}: ${error instanceof Error ? error.message : String(error)}`,
+				)
+			})
 		}
 
 		// --directory includes paths that never contained files. Walk these bottom-up,
@@ -347,11 +352,22 @@ export abstract class ShadowCheckpointService extends EventEmitter {
 		const removeEmptyDirectories = async (relDir: string): Promise<void> => {
 			if (wasIgnored(relDir)) return
 			const absDir = path.join(this.workspaceDir, relDir)
-			for (const entry of await fs.readdir(absDir, { withFileTypes: true })) {
-				if (entry.isDirectory()) await removeEmptyDirectories(`${relDir}${entry.name}/`)
+			try {
+				for (const entry of await fs.readdir(absDir, { withFileTypes: true })) {
+					if (entry.isDirectory()) await removeEmptyDirectories(`${relDir}${entry.name}/`)
+				}
+			} catch (error: unknown) {
+				this.log(
+					`[${this.constructor.name}#removeUntrackedFiles] failed to read ${relDir}: ${error instanceof Error ? error.message : String(error)}`,
+				)
+				return
 			}
 			await fs.rmdir(absDir).catch((error: NodeJS.ErrnoException) => {
-				if (error.code !== "ENOTEMPTY" && error.code !== "EEXIST" && error.code !== "ENOENT") throw error
+				if (error.code !== "ENOTEMPTY" && error.code !== "EEXIST" && error.code !== "ENOENT") {
+					this.log(
+						`[${this.constructor.name}#removeUntrackedFiles] failed to remove ${relDir}: ${error.message}`,
+					)
+				}
 			})
 		}
 		const directories = await git.raw(["ls-files", "--others", "--exclude-standard", "--directory", "-z"])
