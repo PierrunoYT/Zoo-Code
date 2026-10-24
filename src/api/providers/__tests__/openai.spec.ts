@@ -959,13 +959,13 @@ describe("OpenAiHandler", () => {
 		}
 
 		async function request(
-			entryPoint: "streaming" | "non-streaming" | "o3" | "completePrompt",
+			entryPoint: "streaming" | "non-streaming" | "o3" | "o3-non-streaming" | "completePrompt",
 			options: Partial<ApiHandlerOptions>,
 		) {
 			const requestHandler = new OpenAiHandler(
 				makeApiHandlerOptions({
-					openAiModelId: entryPoint === "o3" ? "o3-mini" : "gpt-4o",
-					openAiStreamingEnabled: entryPoint !== "non-streaming",
+					openAiModelId: entryPoint.startsWith("o3") ? "o3-mini" : "gpt-4o",
+					openAiStreamingEnabled: entryPoint !== "non-streaming" && entryPoint !== "o3-non-streaming",
 					...options,
 				}),
 			)
@@ -977,13 +977,13 @@ describe("OpenAiHandler", () => {
 			return collectStream(requestHandler.createMessage("system prompt", [{ role: "user", content: "Hello" }]))
 		}
 
-		it.each(["streaming", "non-streaming", "o3", "completePrompt"] as const)(
+		it.each(["streaming", "non-streaming", "o3", "o3-non-streaming", "completePrompt"] as const)(
 			"names the missing deployment on an Azure 404 (%s)",
 			async (entryPoint) => {
 				mockCreate.mockRejectedValueOnce(makeStatusError("404 Resource not found", 404))
 
 				const error = await request(entryPoint, azureOptions).catch((e: unknown) => e)
-				const deployment = entryPoint === "o3" ? "o3-mini" : "gpt-4o"
+				const deployment = entryPoint.startsWith("o3") ? "o3-mini" : "gpt-4o"
 
 				expect(error).toBeInstanceOf(Error)
 				expect(error).toMatchObject({ status: 404 })
