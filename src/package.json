@@ -3,7 +3,7 @@
 	"displayName": "%extension.displayName%",
 	"description": "%extension.description%",
 	"publisher": "ZooCodeOrganization",
-	"version": "3.90.0",
+	"version": "3.92.0",
 	"icon": "assets/icons/icon.png",
 	"galleryBanner": {
 		"color": "#617A91",
@@ -439,7 +439,7 @@
 		}
 	},
 	"scripts": {
-		"lint": "eslint . --ext=ts --max-warnings=0",
+		"lint": "eslint . --ext=ts --max-warnings=0 --cache --cache-strategy content --cache-location node_modules/.cache/eslint/.eslintcache",
 		"check-types": "tsc --noEmit",
 		"test": "vitest run",
 		"verify:coverage-contract": "node scripts/verify-coverage-contract.mjs",
@@ -474,7 +474,7 @@
 	},
 	"dependencies": {
 		"@anthropic-ai/sdk": "^0.109.0",
-		"@anthropic-ai/vertex-sdk": "^0.19.0",
+		"@anthropic-ai/vertex-sdk": "0.19.0",
 		"@aws-sdk/client-bedrock-runtime": "^3.922.0",
 		"@aws-sdk/credential-providers": "^3.922.0",
 		"@smithy/node-http-handler": "^4.0.0",
@@ -556,7 +556,7 @@
 		"@types/vscode": "1.100.0",
 		"@vitest/coverage-v8": "4.1.11",
 		"@vscode/vsce": "3.9.2",
-		"ai": "7.0.142",
+		"ai": "7.0.143",
 		"esbuild-wasm": "0.28.1",
 		"execa": "9.6.1",
 		"mkdirp": "3.0.1",
