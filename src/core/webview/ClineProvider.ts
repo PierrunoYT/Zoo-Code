@@ -364,6 +364,13 @@ export class ClineProvider
 	 */
 	private readonly localModeConfigIds = new Map<string, string>()
 
+	/**
+	 * The shared mode map as it was when this window opened. Modes this window has not changed
+	 * resolve against it, so another window's later selection cannot reach this window's tasks
+	 * (including delegated subtasks).
+	 */
+	private initialModeConfigIds: Promise<Record<string, string>> = Promise.resolve({})
+
 	constructor(
 		readonly context: vscode.ExtensionContext,
 		private readonly outputChannel: vscode.OutputChannel,
@@ -400,6 +407,7 @@ export class ClineProvider
 		this._workspaceTracker = new WorkspaceTracker(this)
 
 		this.providerSettingsManager = new ProviderSettingsManager(this.context)
+		this.captureInitialModeConfigIds()
 
 		this.customModesManager = new CustomModesManager(this.context, async () => {
 			await this.postStateToWebviewWithoutClineMessages()
@@ -1836,8 +1844,20 @@ export class ClineProvider
 
 	// Provider Profile Management
 
+	private captureInitialModeConfigIds(): void {
+		this.initialModeConfigIds = this.providerSettingsManager.getModeConfigIds().catch((error) => {
+			this.log(`Failed to snapshot mode profile choices: ${error instanceof Error ? error.message : error}`)
+			return {}
+		})
+	}
+
 	private async getModeConfigId(mode: Mode): Promise<string | undefined> {
-		return this.localModeConfigIds.get(mode) ?? (await this.providerSettingsManager.getModeConfigId(mode))
+		return (
+			this.localModeConfigIds.get(mode) ??
+			(await this.initialModeConfigIds)[mode] ??
+			// Modes created after this window opened have no snapshot entry.
+			(await this.providerSettingsManager.getModeConfigId(mode))
+		)
 	}
 
 	private async setModeConfig(mode: Mode, id: string): Promise<void> {
@@ -3396,6 +3416,9 @@ export class ClineProvider
 
 		await this.contextProxy.resetAllState()
 		await this.providerSettingsManager.resetAllConfigs()
+		// Cached choices point at profiles that no longer exist; re-read the reset mapping.
+		this.localModeConfigIds.clear()
+		this.captureInitialModeConfigIds()
 		await this.customModesManager.resetCustomModes()
 		await this.removeClineFromStack()
 		await this.postStateToWebview()
