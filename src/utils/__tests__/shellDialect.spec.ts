@@ -1,18 +1,21 @@
 import { describeShellDialect } from "../shellDialect"
 
 describe("describeShellDialect", () => {
-	const cmdSyntax = ["`&`", "`&&`", "`%VAR%`", "`set X=Y`", "`%ERRORLEVEL%`"]
+	const cmdSyntax = ["`&`", "`&&`", "`%VAR%`", "`set X=Y`", "`%ERRORLEVEL%`", "`!ERRORLEVEL!`"]
 	const powershellSyntax = ["`;`", "`$env:VAR`", "`$?`", "`$LASTEXITCODE`"]
 
 	it.each([
 		{ shell: "C:\\Windows\\System32\\cmd.exe", expected: "cmd.exe", syntax: cmdSyntax },
 		{ shell: "C:\\Windows\\System32\\CMD.EXE", expected: "cmd.exe", syntax: cmdSyntax },
+		{ shell: "cmd", expected: "cmd.exe", syntax: cmdSyntax },
 		{ shell: "C:\\Program Files\\PowerShell\\7\\pwsh.exe", expected: "PowerShell", syntax: powershellSyntax },
 		{
 			shell: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
 			expected: "PowerShell",
 			syntax: powershellSyntax,
 		},
+		{ shell: "powershell", expected: "PowerShell", syntax: powershellSyntax },
+		{ shell: "pwsh", expected: "PowerShell", syntax: powershellSyntax },
 	])("names the dialect and its syntax for $shell", ({ shell, expected, syntax }) => {
 		const description = describeShellDialect(shell)
 

@@ -13,7 +13,9 @@ export function describeShellDialect(shellPath: string): string | undefined {
 	if (name === "cmd.exe" || name === "cmd") {
 		return (
 			"Commands run through Windows cmd.exe, not bash. Use cmd syntax: `&` or `&&` to chain commands " +
-			"(`;` is not a separator), `%VAR%` for variables, `set X=Y`, `%ERRORLEVEL%` for exit codes, " +
+			"(`;` is not a separator), `%VAR%` for variables, `set X=Y`, and `%ERRORLEVEL%` for exit codes " +
+			"(`%ERRORLEVEL%` expands before a chained line runs, so use `&&` or `||` for same-line success checks; " +
+			"enable delayed expansion and use `!ERRORLEVEL!` when the numeric result is needed after a command), " +
 			"and `dir`, `type`, `findstr`. POSIX tools may be missing or shadowed by other binaries on PATH."
 		)
 	}
