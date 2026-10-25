@@ -25,8 +25,9 @@ export function describeShellDialect(shellPath: string): string | undefined {
 	if (name === "powershell.exe" || name === "pwsh.exe" || name === "powershell" || name === "pwsh") {
 		return (
 			"Commands run through PowerShell, not bash. Use PowerShell syntax: `;` to chain commands, " +
-			"`$env:VAR` for environment variables, `$LASTEXITCODE` for exit codes, and cmdlets such as " +
-			"`Get-ChildItem` and `Select-String`."
+			"`$env:VAR` for environment variables, `$?` for whether the last command succeeded " +
+			"(`$LASTEXITCODE` only holds the exit code of native programs and does not change when a cmdlet fails), " +
+			"and cmdlets such as `Get-ChildItem` and `Select-String`."
 		)
 	}
 

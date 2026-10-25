@@ -13,6 +13,7 @@ import { unescapeHtmlEntities } from "../../../utils/text-normalization"
 import { Terminal } from "../../../integrations/terminal/Terminal"
 import { TerminalRegistry } from "../../../integrations/terminal/TerminalRegistry"
 import type { RooTerminalCallbacks, RooTerminalProcess } from "../../../integrations/terminal/types"
+import { t } from "../../../i18n"
 
 // Mock dependencies
 vitest.mock("execa", () => ({
@@ -61,6 +62,15 @@ vitest.mock("../../task/Task", async (importOriginal) => {
 })
 vitest.mock("../../prompts/responses")
 
+// Tests run with empty translation resources, so `t` returns the key without its namespace.
+// Keep that default, and let individual tests replace it with an interpolating fake.
+const stripNamespace = (key: string) => key.replace(/^\w+:/, "")
+
+vitest.mock("../../../i18n", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("../../../i18n")>()
+	return { ...actual, t: vitest.fn((key: string) => key.replace(/^\w+:/, "")) }
+})
+
 const mockRunDcg = vitest.fn()
 const mockEnsureDcgInstalled = vitest.fn()
 
@@ -93,6 +103,7 @@ describe("executeCommandTool", () => {
 	beforeEach(() => {
 		// Reset mocks
 		vitest.clearAllMocks()
+		vitest.mocked(t).mockImplementation(stripNamespace)
 		vitest.useRealTimers()
 
 		// Spy on executeCommandInTerminal and mock its return value
@@ -320,14 +331,27 @@ describe("executeCommandTool", () => {
 		})
 
 		it.each([
-			["C:\\Windows\\System32\\cmd.exe", true],
-			["C:\\Program Files\\PowerShell\\7\\pwsh.exe", true],
-			["/bin/bash", false],
-			[undefined, false],
-		])("appends the POSIX-assumption note only for non-POSIX shell %s", (shellPath, expectNote) => {
+			["C:\\Windows\\System32\\cmd.exe", "cmd.exe"],
+			["C:\\Program Files\\PowerShell\\7\\pwsh.exe", "pwsh.exe"],
+			["/bin/bash", undefined],
+			[undefined, undefined],
+		])("appends the POSIX-assumption note only for non-POSIX shell %s", (shellPath, expectedShell) => {
+			// Interpolate like the real translation so a dropped `shell` option fails the test.
+			vitest
+				.mocked(t)
+				.mockImplementation((key: string, options?: Record<string, unknown>) =>
+					options?.shell ? `${stripNamespace(key)}[shell=${String(options.shell)}]` : stripNamespace(key),
+				)
+
 			const message = executeCommandModule.formatDcgBlockedMessage(undefined, undefined, shellPath)
 
-			expect(message.includes("executeCommand.destructiveCommandGuard.assumedPosixNote")).toBe(expectNote)
+			if (expectedShell) {
+				expect(message).toContain(
+					`executeCommand.destructiveCommandGuard.assumedPosixNote[shell=${expectedShell}]`,
+				)
+			} else {
+				expect(message).not.toContain("assumedPosixNote")
+			}
 		})
 
 		it("shows a DCG block message as an error before requesting explicit approval", async () => {
