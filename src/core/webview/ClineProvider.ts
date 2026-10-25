@@ -2445,6 +2445,11 @@ export class ClineProvider
 		const currentWorkspace = this.cwd
 		const originalWorkspace = historyItem.workspace
 
+		// The CLI has no modal to answer, and its host would wait forever for a task that is never created.
+		if (process.env.ROO_CLI_RUNTIME === "1") {
+			return historyItem
+		}
+
 		if (!currentWorkspace || !originalWorkspace || arePathsEqual(currentWorkspace, originalWorkspace)) {
 			return historyItem
 		}
@@ -2546,16 +2551,20 @@ export class ClineProvider
 		}
 
 		try {
-			await updateTaskMessages({
-				taskId,
-				globalStoragePath,
-				update: (messages) => {
-					removedCheckpoints = messages.filter(
-						(message) => message.type === "say" && message.say === "checkpoint_saved",
-					)
-					return messages.filter((message) => !removedCheckpoints.includes(message))
-				},
-			})
+			// History migration can create a record for a task directory that has no ui_messages.json;
+			// that is an empty set of checkpoint rows, not an error. Invalid existing content still rejects.
+			if (await fileExistsAtPath(path.join(taskDir, GlobalFileNames.uiMessages))) {
+				await updateTaskMessages({
+					taskId,
+					globalStoragePath,
+					update: (messages) => {
+						removedCheckpoints = messages.filter(
+							(message) => message.type === "say" && message.say === "checkpoint_saved",
+						)
+						return messages.filter((message) => !removedCheckpoints.includes(message))
+					},
+				})
+			}
 			persisted = await this.setTaskHistoryWorkspace(originalHistoryItem, updatedHistoryItem.workspace)
 		} catch (error) {
 			if (removedCheckpoints.length > 0) {

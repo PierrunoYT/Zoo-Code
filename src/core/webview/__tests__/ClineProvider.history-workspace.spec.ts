@@ -34,6 +34,57 @@ const createProvider = (workspace: string) => {
 describe("ClineProvider historical workspace selection", () => {
 	afterEach(() => {
 		vi.restoreAllMocks()
+		vi.unstubAllEnvs()
+	})
+
+	it("never prompts in the CLI runtime, where the modal cannot be answered", async () => {
+		vi.stubEnv("ROO_CLI_RUNTIME", "1")
+		const provider = createProvider("/current/workspace")
+		const prompt = vi.spyOn(vscode.window, "showWarningMessage")
+		const item = historyItem("/old/worktree")
+
+		await expect(provider.prepareHistoryItemForResume(item)).resolves.toBe(item)
+		expect(prompt).not.toHaveBeenCalled()
+	})
+
+	describe("setTaskHistoryWorkspace without a stored record", () => {
+		const createLegacyProvider = (stored: HistoryItem | undefined) => {
+			const provider = createProvider("/current/workspace")
+			Object.defineProperty(provider, "taskHistoryStore", { value: { get: vi.fn().mockReturnValue(stored) } })
+			provider.updateTaskHistory = vi.fn().mockResolvedValue([])
+			provider.postMessageToWebview = vi.fn().mockResolvedValue(true)
+			return provider
+		}
+
+		it("leaves history alone when a workspace is expected", async () => {
+			const provider = createLegacyProvider(undefined)
+
+			await expect(
+				provider["setTaskHistoryWorkspace"](
+					historyItem("/old/worktree"),
+					"/current/workspace",
+					"/old/worktree",
+				),
+			).resolves.toBeUndefined()
+
+			expect(provider.updateTaskHistory).not.toHaveBeenCalled()
+			expect(provider.postMessageToWebview).not.toHaveBeenCalled()
+		})
+
+		it("writes the supplied item and returns the stored record when no workspace is expected", async () => {
+			const stored = historyItem("/current/workspace")
+			const provider = createLegacyProvider(undefined)
+			vi.mocked(provider["taskHistoryStore"].get).mockReturnValueOnce(undefined).mockReturnValue(stored)
+
+			await expect(
+				provider["setTaskHistoryWorkspace"](historyItem("/old/worktree"), "/current/workspace"),
+			).resolves.toBe(stored)
+
+			expect(provider.updateTaskHistory).toHaveBeenCalledWith({
+				...historyItem("/old/worktree"),
+				workspace: "/current/workspace",
+			})
+		})
 	})
 
 	it("keeps a history item unchanged when it already belongs to the current workspace", async () => {
@@ -397,6 +448,33 @@ describe("ClineProvider historical workspace selection", () => {
 			)
 
 			expect(store.get(original.id)?.workspace).toBe("/newer/workspace")
+			// The guarded rollback left the newer workspace alone, so it announced nothing more.
+			expect(provider.postMessageToWebview).toHaveBeenCalledOnce()
+		})
+
+		it("moves the workspace when the task has no ui_messages.json", async () => {
+			await fs.mkdir(checkpointsDir, { recursive: true })
+			await fs.writeFile(path.join(checkpointsDir, "HEAD"), "old checkpoint")
+			const provider = createStoredProvider()
+
+			await expect(provider["resetTaskCheckpointsForWorkspaceChange"](original, updated)).resolves.toEqual(
+				updated,
+			)
+
+			await expect(fs.stat(messagesPath)).rejects.toMatchObject({ code: "ENOENT" })
+			await expect(fs.stat(checkpointsDir)).rejects.toMatchObject({ code: "ENOENT" })
+			expect(store.get(original.id)?.workspace).toBe("/current/workspace")
+		})
+
+		it("still rejects a ui_messages.json with invalid content and keeps the original workspace", async () => {
+			await writeCheckpointState()
+			await fs.writeFile(messagesPath, "not json")
+			const provider = createStoredProvider()
+
+			await expect(provider["resetTaskCheckpointsForWorkspaceChange"](original, updated)).rejects.toThrow()
+
+			expect(store.get(original.id)?.workspace).toBe("/old/worktree")
+			await expect(fs.readFile(path.join(checkpointsDir, "HEAD"), "utf8")).resolves.toBe("old checkpoint")
 		})
 
 		it("retries checkpoint backup cleanup without rolling back committed history", async () => {

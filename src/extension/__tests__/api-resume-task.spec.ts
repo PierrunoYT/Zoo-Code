@@ -4,6 +4,7 @@ import type { HistoryItem } from "@roo-code/types"
 
 import { API } from "../api"
 import type { ClineProvider } from "../../core/webview/ClineProvider"
+import { makeClineProviderFactory } from "../../test-utils/provider"
 
 const historyItem = {
 	id: "task-1602",
@@ -30,7 +31,7 @@ describe("API.resumeTask", () => {
 		} as unknown as ClineProvider
 		// Only appendLine is used by this API test.
 		const outputChannel = { appendLine: vi.fn() } as unknown as vscode.OutputChannel
-		const api = new API(outputChannel, provider)
+		const api = new API(outputChannel, provider, makeClineProviderFactory())
 
 		await api.resumeTask(historyItem.id)
 
