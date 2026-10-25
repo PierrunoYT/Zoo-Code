@@ -255,6 +255,7 @@ describe("ClineProvider - API Handler Rebuild Guard", () => {
 				},
 			]),
 			setModeConfig: vi.fn(),
+			clearModeConfig: vi.fn().mockResolvedValue(undefined),
 			getModeConfigId: vi.fn().mockResolvedValue(undefined),
 			activateProfile: vi.fn().mockResolvedValue({
 				name: "test-config",
@@ -420,6 +421,69 @@ describe("ClineProvider - API Handler Rebuild Guard", () => {
 			// The task's API handler is rebuilt from the prior settings.
 			expect(mockTask.updateApiConfiguration).toHaveBeenLastCalledWith(previousSettings)
 			expect(vscode.window.showErrorMessage).toHaveBeenCalledWith("errors.create_api_config")
+		})
+
+		test("removes a mode binding that did not exist before when activation fails", async () => {
+			const manager = provider["providerSettingsManager"]
+			const { mode } = await provider.getState()
+			vi.mocked(manager.getModeConfigId).mockResolvedValue(undefined)
+			vi.spyOn(provider.contextProxy, "setProviderSettings").mockRejectedValueOnce(new Error("write failed"))
+
+			await provider.upsertProviderProfile("test-config", {
+				apiProvider: providerIdentifiers.openrouter,
+				openRouterModelId: "anthropic/claude",
+			})
+
+			expect(manager.clearModeConfig).toHaveBeenCalledWith(mode)
+			expect(manager.setModeConfig).not.toHaveBeenLastCalledWith(mode, undefined)
+		})
+
+		test("rebuilds a delegated task from its own configuration, not the global settings, when activation fails", async () => {
+			const manager = provider["providerSettingsManager"]
+			const childConfiguration = {
+				apiProvider: providerIdentifiers.anthropic,
+				apiModelId: "claude-handoff-model",
+			}
+			expect(provider.contextProxy.getProviderSettings()).not.toMatchObject(childConfiguration)
+			const childTask = new Task({ ...defaultTaskOptions, apiConfiguration: childConfiguration })
+			await provider.addClineToStack(childTask)
+			vi.mocked(manager.hasConfig).mockResolvedValue(true)
+			vi.mocked(manager.getProfile).mockResolvedValue({ name: "test-config", id: "test-id" })
+			vi.spyOn(provider.contextProxy, "setProviderSettings").mockRejectedValueOnce(new Error("write failed"))
+
+			await provider.upsertProviderProfile("test-config", {
+				apiProvider: providerIdentifiers.openrouter,
+				openRouterModelId: "anthropic/claude",
+			})
+
+			expect(childTask.updateApiConfiguration).toHaveBeenLastCalledWith(childConfiguration)
+		})
+
+		test("reports a partial state, after running every rollback step, when the rollback itself fails", async () => {
+			const manager = provider["providerSettingsManager"]
+			vi.mocked(manager.hasConfig).mockResolvedValue(true)
+			vi.mocked(manager.getProfile).mockResolvedValue({ name: "test-config", id: "test-id" })
+			vi.mocked(manager.getModeConfigId).mockResolvedValue("previous-mode-id")
+			const previousSettings = provider.contextProxy.getProviderSettings()
+			const setProviderSettings = vi
+				.spyOn(provider.contextProxy, "setProviderSettings")
+				.mockRejectedValueOnce(new Error("activation write failed"))
+			// Activation writes the mode binding first, then the rollback fails to restore it.
+			vi.mocked(manager.setModeConfig)
+				.mockResolvedValueOnce(undefined)
+				.mockRejectedValue(new Error("restore failed"))
+
+			const result = await provider.upsertProviderProfile("test-config", {
+				apiProvider: providerIdentifiers.openrouter,
+				openRouterModelId: "anthropic/claude",
+			})
+
+			expect(result).toBeUndefined()
+			// The failed mode restore did not stop the other steps.
+			expect(manager.saveConfig).toHaveBeenLastCalledWith("test-config", { id: "test-id" })
+			expect(setProviderSettings).toHaveBeenLastCalledWith(previousSettings)
+			expect(vscode.window.showErrorMessage).toHaveBeenCalledWith("errors.update_profile_model_partial")
+			expect(vscode.window.showErrorMessage).not.toHaveBeenCalledWith("errors.create_api_config")
 		})
 
 		test("deletes a profile that did not exist before when activation fails", async () => {

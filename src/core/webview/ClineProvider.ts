@@ -1945,12 +1945,18 @@ export class ClineProvider
 			previousProfile = stored
 		}
 
+		// A delegated child can run with a handoff configuration that differs from the global
+		// settings, so rollback rebuilds this task from its own captured configuration.
+		const task = this.getCurrentTask()
+
 		return {
 			previousProfile,
 			listApiConfigMeta: this.getGlobalState("listApiConfigMeta"),
 			currentApiConfigName: this.getGlobalState("currentApiConfigName"),
 			modeConfigId: await this.providerSettingsManager.getModeConfigId(mode),
 			providerSettings: this.contextProxy.getProviderSettings(),
+			task,
+			taskApiConfiguration: task?.apiConfiguration ? structuredClone(task.apiConfiguration) : undefined,
 		}
 	}
 
@@ -1969,14 +1975,15 @@ export class ClineProvider
 					}),
 			this.updateGlobalState("listApiConfigMeta", snapshot.listApiConfigMeta),
 			this.updateGlobalState("currentApiConfigName", snapshot.currentApiConfigName),
+			// A mode with no previous binding must not stay bound to a profile that is being removed.
 			snapshot.modeConfigId
 				? this.providerSettingsManager.setModeConfig(mode, snapshot.modeConfigId)
-				: Promise.resolve(),
+				: this.providerSettingsManager.clearModeConfig(mode),
 			this.contextProxy.setProviderSettings(snapshot.providerSettings),
 		])
 
-		if (activate) {
-			this.updateTaskApiHandlerIfNeeded(snapshot.providerSettings, { forceRebuild: true })
+		if (activate && snapshot.task && snapshot.taskApiConfiguration && this.getCurrentTask() === snapshot.task) {
+			this.updateTaskApiHandlerIfNeeded(snapshot.taskApiConfiguration, { forceRebuild: true })
 		}
 
 		const failed = results.find((result): result is PromiseRejectedResult => result.status === "rejected")

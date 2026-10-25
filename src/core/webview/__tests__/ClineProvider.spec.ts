@@ -3463,6 +3463,7 @@ describe("ClineProvider", () => {
 				hasConfig: vi.fn().mockResolvedValue(false),
 				getModeConfigId: vi.fn().mockResolvedValue(undefined),
 				setModeConfig: vi.fn(),
+				clearModeConfig: vi.fn().mockResolvedValue(undefined),
 				saveConfig: vi.fn().mockResolvedValue(undefined),
 				listConfig: vi
 					.fn()
@@ -3513,6 +3514,7 @@ describe("ClineProvider", () => {
 				hasConfig: vi.fn().mockResolvedValue(false),
 				getModeConfigId: vi.fn().mockResolvedValue(undefined),
 				setModeConfig: vi.fn(),
+				clearModeConfig: vi.fn().mockResolvedValue(undefined),
 				saveConfig: vi.fn().mockResolvedValue(undefined),
 				listConfig: vi
 					.fn()
@@ -3568,6 +3570,7 @@ describe("ClineProvider", () => {
 				hasConfig: vi.fn().mockResolvedValue(false),
 				getModeConfigId: vi.fn().mockResolvedValue(undefined),
 				setModeConfig: vi.fn(),
+				clearModeConfig: vi.fn().mockResolvedValue(undefined),
 				saveConfig: vi.fn().mockResolvedValue(undefined),
 				listConfig: vi
 					.fn()
