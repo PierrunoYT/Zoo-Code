@@ -1756,6 +1756,14 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 			})
 		}
 
+		// A queued update for a different message (e.g. reasoning followed by text) must not be
+		// overwritten by this one, so deliver it now.
+		const queued = this.pendingPartialMessage
+		if (queued && queued.ts !== message.ts) {
+			this.cancelPendingPartialMessageUpdate()
+			post(queued)
+		}
+
 		const elapsed = Date.now() - this.lastPartialMessagePostTs
 		if (elapsed >= PARTIAL_MESSAGE_UPDATE_INTERVAL_MS) {
 			this.cancelPendingPartialMessageUpdate()

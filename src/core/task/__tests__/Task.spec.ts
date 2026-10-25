@@ -4467,6 +4467,40 @@ describe("Cline", () => {
 			expect(messageUpdates.map(({ text }) => text)).toEqual(["second"])
 		})
 
+		it("holds a queued update until the 120ms interval elapses", async () => {
+			const { task, messageUpdates } = createStreamingTask()
+
+			await task.say("text", "first", undefined, true)
+			await task.say("text", "second", undefined, true)
+			await task.say("text", "third", undefined, true)
+			expect(messageUpdates.map(({ text }) => text)).toEqual(["second"])
+
+			await vi.advanceTimersByTimeAsync(119)
+			expect(messageUpdates.map(({ text }) => text)).toEqual(["second"])
+
+			await vi.advanceTimersByTimeAsync(1)
+			expect(messageUpdates.map(({ text }) => text)).toEqual(["second", "third"])
+		})
+
+		it("delivers a queued update for one message before updating a different message", async () => {
+			const { task, messageUpdates } = createStreamingTask()
+
+			await task.say("reasoning", "r1", undefined, true)
+			await task.say("reasoning", "r2", undefined, true)
+			await task.say("reasoning", "r3", undefined, true)
+			expect(messageUpdates.map(({ text }) => text)).toEqual(["r2"])
+
+			// A new message starts, then streams: its update must not replace the queued "r3".
+			// Message timestamps are Date.now(), which fake timers freeze, so step the clock.
+			await vi.advanceTimersByTimeAsync(1)
+			await task.say("text", "t1", undefined, true)
+			await task.say("text", "t2", undefined, true)
+			expect(messageUpdates.map(({ text }) => text)).toEqual(["r2", "r3"])
+
+			await vi.advanceTimersByTimeAsync(500)
+			expect(messageUpdates.map(({ text }) => text)).toEqual(["r2", "r3", "t2"])
+		})
+
 		it("posts updates that are far enough apart immediately", async () => {
 			const { task, messageUpdates } = createStreamingTask()
 
