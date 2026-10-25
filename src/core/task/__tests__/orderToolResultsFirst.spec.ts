@@ -16,6 +16,11 @@ const image = (data: string): Anthropic.Messages.ImageBlockParam => ({
 	source: { type: "base64", media_type: "image/jpeg", data },
 })
 const text = (value: string): Anthropic.Messages.TextBlockParam => ({ type: "text", text: value })
+const nested = (id: string, content: Anthropic.Messages.ToolResultBlockParam["content"]) => ({
+	type: "tool_result" as const,
+	tool_use_id: id,
+	content,
+})
 
 describe("orderToolResultsFirst", () => {
 	it("repairs the persisted #1774 shape so every tool_result leads the message", () => {
@@ -29,10 +34,10 @@ describe("orderToolResultsFirst", () => {
 
 		const [repaired] = orderToolResultsFirst([stuck])
 
+		// The image moves into the read_file result, the shape the Anthropic API expects.
 		expect(repaired.content).toEqual([
-			toolResult("read"),
+			nested("read", [text("result read"), image("jpeg")]),
 			toolResult("cmd"),
-			image("jpeg"),
 			text("<environment_details>"),
 		])
 		expect(repaired.ts).toBe(16)
@@ -55,11 +60,36 @@ describe("orderToolResultsFirst", () => {
 
 		expect(repaired.content).toEqual([
 			toolResult("a"),
-			toolResult("b"),
-			toolResult("c"),
-			image("1"),
-			image("2"),
+			nested("b", [text("result b"), image("1")]),
+			nested("c", [text("result c"), image("2")]),
 			text("t"),
+		])
+	})
+
+	it("appends an image to a result whose content is already an array", () => {
+		const withArray = nested("a", [text("first"), text("second")])
+
+		const [repaired] = orderToolResultsFirst([{ role: "user", content: [withArray, image("1"), toolResult("b")] }])
+
+		expect(repaired.content).toEqual([nested("a", [text("first"), text("second"), image("1")]), toolResult("b")])
+		// The original result block is not mutated.
+		expect(withArray.content).toEqual([text("first"), text("second")])
+	})
+
+	it("keeps an image standalone when no result directly precedes it", () => {
+		const [repaired] = orderToolResultsFirst([
+			{
+				role: "user",
+				content: [image("lead"), toolResult("a"), text("note"), image("after-text"), toolResult("b")],
+			},
+		])
+
+		expect(repaired.content).toEqual([
+			toolResult("a"),
+			toolResult("b"),
+			image("lead"),
+			text("note"),
+			image("after-text"),
 		])
 	})
 

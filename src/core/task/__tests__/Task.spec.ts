@@ -3024,11 +3024,17 @@ describe("Cline", () => {
 
 				const [, sentHistory] = requireDefined(createMessageSpy.mock.calls[0])
 				const lastUserContent = requireDefined(sentHistory.at(-1)).content as Array<{ type: string }>
-				// Both results lead, followed by the image and the environment details, none lost.
+				// Both results lead; the image sits inside the read_file result; the environment details follow.
 				expect(lastUserContent).toEqual([
-					{ type: "tool_result", tool_use_id: "read", content: "File: logo.jpg" },
+					{
+						type: "tool_result",
+						tool_use_id: "read",
+						content: [
+							{ type: "text", text: "File: logo.jpg" },
+							{ type: "image", source: { type: "base64", media_type: "image/jpeg", data: "abc" } },
+						],
+					},
 					{ type: "tool_result", tool_use_id: "cmd", content: "Exit code: 0" },
-					{ type: "image", source: { type: "base64", media_type: "image/jpeg", data: "abc" } },
 					{ type: "text", text: "<environment_details>" },
 				])
 				// The stored history keeps its original shape.
