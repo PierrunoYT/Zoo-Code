@@ -989,7 +989,14 @@ describe("ClineProvider Task History Synchronization", () => {
 				})
 
 				expect(postedStates()).toHaveLength(1)
-				expect("taskHistory" in postedStates()[0]).toBe(expectHistory)
+				const state = postedStates()[0]
+				if (expectHistory) {
+					expect(state.taskHistory).toEqual(
+						expect.arrayContaining([expect.objectContaining({ id: "settings-task" })]),
+					)
+				} else {
+					expect(state).not.toHaveProperty("taskHistory")
+				}
 			},
 		)
 	})
