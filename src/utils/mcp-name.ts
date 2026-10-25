@@ -150,7 +150,12 @@ export function buildMcpToolName(serverName: string, toolName: string): string {
 		return fullName
 	}
 
-	const hash = createHash("sha256").update(fullName).digest("hex").slice(0, HASH_SUFFIX_LENGTH)
+	// Models may return the name with hyphens turned into underscores; hash the normalized spelling
+	// so such a name still rebuilds to the declared one.
+	const hash = createHash("sha256")
+		.update(normalizeForComparison(fullName))
+		.digest("hex")
+		.slice(0, HASH_SUFFIX_LENGTH)
 	const budget = MAX_TOOL_NAME_LENGTH - HASH_SUFFIX_LENGTH - 1
 	const prefix = `${MCP_TOOL_PREFIX}${MCP_TOOL_SEPARATOR}`
 	// Cap the server part so the second separator and at least one tool character survive;
