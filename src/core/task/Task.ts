@@ -3866,6 +3866,9 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 			userContent: Anthropic.Messages.ContentBlockParam[]
 			includeFileDetails: boolean
 			retryAttempt?: number
+			// Automatic retries of a mid-stream failure. Kept apart from `retryAttempt`, which also
+			// tells shouldAddUserMessageToHistory that the user message is already in history.
+			midStreamAutoRetries?: number
 			userMessageWasRemoved?: boolean // Track if user message was removed due to empty response
 		}
 
@@ -4674,7 +4677,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 							continue
 						} else {
 							const stateForBackoff = await this.providerRef.deref()?.getState()
-							const midStreamRetryAttempt = currentItem.retryAttempt ?? 0
+							const midStreamRetryAttempt = currentItem.midStreamAutoRetries ?? 0
 
 							// Without auto-approval, or once automatic retries are exhausted, a
 							// persistently failing stream (e.g. an upstream idle timeout) would
@@ -4690,10 +4693,13 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 								}
 
 								await this.say("api_req_retried")
+								// The user message is already in history, so keep the history attempt positive
+								// and only reset the automatic-retry count.
 								stack.push({
 									userContent: currentUserContent,
 									includeFileDetails: false,
-									retryAttempt: 0,
+									retryAttempt: (currentItem.retryAttempt ?? 0) + 1,
+									midStreamAutoRetries: 0,
 								})
 								continue
 							}
@@ -4704,7 +4710,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 							)
 
 							// Apply exponential backoff similar to first-chunk errors
-							await this.backoffAndAnnounce(currentItem.retryAttempt ?? 0, error)
+							await this.backoffAndAnnounce(midStreamRetryAttempt, error)
 
 							// Check if task was aborted during the backoff
 							if (this.abort) {
@@ -4721,6 +4727,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 								userContent: currentUserContent,
 								includeFileDetails: false,
 								retryAttempt: (currentItem.retryAttempt ?? 0) + 1,
+								midStreamAutoRetries: midStreamRetryAttempt + 1,
 							})
 
 							// Continue to retry the request
