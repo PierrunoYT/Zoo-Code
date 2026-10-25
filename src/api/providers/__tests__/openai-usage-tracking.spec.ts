@@ -385,6 +385,34 @@ describe("OpenAiHandler with usage tracking fix", () => {
 				},
 			])
 		})
+
+		// Only OpenAI's nested counter must be a subset of prompt_tokens; this pins the inclusive boundary.
+		it.each([
+			["below the prompt size", 99, 99],
+			["equal to the prompt size", 100, 100],
+			["above the prompt size", 101, undefined],
+		])(
+			"accepts a nested cached_tokens count %s with no cache_read_input_tokens",
+			async (_name, cached, expected) => {
+				const cacheHandler = new OpenAiHandler({ ...mockOptions, openAiStreamingEnabled })
+				const usage = {
+					prompt_tokens: 100,
+					completion_tokens: 5,
+					prompt_tokens_details: { cached_tokens: cached },
+				}
+				mockCreate.mockResolvedValueOnce(
+					openAiStreamingEnabled
+						? asyncStreamFrom([{ choices: [], usage }])
+						: { choices: [{ message: { content: "Response" } }], usage },
+				)
+
+				const chunks = await collectStream(cacheHandler.createMessage("system prompt", []))
+
+				expect(chunks.filter((chunk) => chunk.type === "usage")).toEqual([
+					{ type: "usage", inputTokens: 100, outputTokens: 5, cacheReadTokens: expected },
+				])
+			},
+		)
 	})
 
 	it.each([null, undefined, {}, { prompt_tokens_details: null }])(
