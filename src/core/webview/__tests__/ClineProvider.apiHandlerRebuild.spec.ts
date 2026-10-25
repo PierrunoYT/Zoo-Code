@@ -396,6 +396,9 @@ describe("ClineProvider - API Handler Rebuild Guard", () => {
 			vi.mocked(manager.getProfile).mockResolvedValue({ name: "test-config", ...previousProfile })
 			vi.mocked(manager.getModeConfigId).mockResolvedValue("previous-mode-id")
 			const previousSettings = provider.contextProxy.getProviderSettings()
+			const { mode } = await provider.getState()
+			const mockTask = new Task({ ...defaultTaskOptions, apiConfiguration: previousSettings })
+			await provider.addClineToStack(mockTask)
 			const setProviderSettings = vi
 				.spyOn(provider.contextProxy, "setProviderSettings")
 				.mockRejectedValueOnce(new Error("context write failed"))
@@ -412,8 +415,10 @@ describe("ClineProvider - API Handler Rebuild Guard", () => {
 				openRouterModelId: "anthropic/claude",
 			})
 			expect(manager.saveConfig).toHaveBeenLastCalledWith("test-config", previousProfile)
-			expect(manager.setModeConfig).toHaveBeenLastCalledWith(expect.any(String), "previous-mode-id")
+			expect(manager.setModeConfig).toHaveBeenLastCalledWith(mode, "previous-mode-id")
 			expect(setProviderSettings).toHaveBeenLastCalledWith(previousSettings)
+			// The task's API handler is rebuilt from the prior settings.
+			expect(mockTask.updateApiConfiguration).toHaveBeenLastCalledWith(previousSettings)
 			expect(vscode.window.showErrorMessage).toHaveBeenCalledWith("errors.create_api_config")
 		})
 

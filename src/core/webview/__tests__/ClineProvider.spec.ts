@@ -3498,6 +3498,9 @@ describe("ClineProvider", () => {
 
 		test("handles buildApiHandler error in updateApiConfiguration", async () => {
 			await provider.resolveWebviewView(mockWebviewView)
+			// Seed the active profile so the rollback has a known name to put back.
+			await provider.setValue("currentApiConfigName", "current-config")
+			vi.mocked(mockContext.globalState.update).mockClear()
 			const messageHandler = (mockWebviewView.webview.onDidReceiveMessage as any).mock.calls[0][0]
 
 			// Mock buildApiHandler to throw an error
@@ -3554,7 +3557,7 @@ describe("ClineProvider", () => {
 				.mocked(mockContext.globalState.update)
 				.mock.calls.filter(([key]) => key === "currentApiConfigName")
 			expect(nameWrites.at(0)?.[1]).toBe("test-config")
-			expect(nameWrites.at(-1)?.[1]).not.toBe("test-config")
+			expect(nameWrites.at(-1)?.[1]).toBe("current-config")
 		})
 
 		test("handles successful saveApiConfiguration", async () => {
