@@ -1,6 +1,6 @@
 // npx vitest run src/api/transform/__tests__/bedrock-converse-format.spec.ts
 
-import { convertToBedrockConverseMessages } from "../bedrock-converse-format"
+import { convertToBedrockConverseMessages, REASONING_ONLY_PLACEHOLDER } from "../bedrock-converse-format"
 import { Anthropic } from "@anthropic-ai/sdk"
 import { ContentBlock, ToolResultContentBlock } from "@aws-sdk/client-bedrock-runtime"
 import { OPENAI_CALL_ID_MAX_LENGTH } from "../../../utils/tool-id"
@@ -83,8 +83,10 @@ describe("convertToBedrockConverseMessages", () => {
 
 		expect(convertToBedrockConverseMessages(messages)).toStrictEqual([
 			{ role: "assistant", content: [{ text: "Reading the file." }] },
-			{ role: "assistant", content: [{ text: "" }] },
+			// Bedrock rejects blank text blocks, so a reasoning-only turn keeps a non-blank placeholder.
+			{ role: "assistant", content: [{ text: REASONING_ONLY_PLACEHOLDER }] },
 		])
+		expect(REASONING_ONLY_PLACEHOLDER.trim()).not.toBe("")
 	})
 
 	it("drops signatures issued by another provider when converting thinking blocks", () => {

@@ -2,6 +2,9 @@ import { Anthropic } from "@anthropic-ai/sdk"
 import { ConversationRole, Message, ContentBlock } from "@aws-sdk/client-bedrock-runtime"
 import { sanitizeOpenAiCallId } from "../../utils/tool-id"
 
+/** Stand-in text for a turn whose only content was filtered reasoning (Bedrock rejects blank text). */
+export const REASONING_ONLY_PLACEHOLDER = "[Reasoning omitted]"
+
 interface BedrockMessageContent {
 	type: "text" | "image" | "video" | "tool_use" | "tool_result" | "reasoning" | "thinking"
 	text?: string
@@ -246,10 +249,11 @@ export function convertToBedrockConverseMessages(
 
 		return {
 			role,
-			// Bedrock rejects an empty content array; a reasoning-only turn becomes empty text.
+			// Bedrock rejects an empty content array and blank text blocks, so a turn that held only
+			// reasoning keeps its place in the conversation with a short non-blank placeholder.
 			content:
 				content.length === 0 && anthropicMessage.content.length > 0
-					? ([{ text: "" }] as ContentBlock[])
+					? ([{ text: REASONING_ONLY_PLACEHOLDER }] as ContentBlock[])
 					: content,
 		}
 	})
