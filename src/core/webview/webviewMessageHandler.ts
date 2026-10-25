@@ -879,7 +879,13 @@ export const webviewMessageHandler = async (
 					await provider.contextProxy.setValue(key as keyof RooCodeSettings, newValue)
 				}
 
-				await provider.postStateToWebview()
+				// While the task history scan runs, a full post would wait on it and stall the
+				// settings response. The full state follows once the scan completes (see webviewDidLaunch).
+				if (provider.taskHistoryStore.isInitialized) {
+					await provider.postStateToWebview()
+				} else {
+					await provider.postStateToWebviewWithoutTaskHistory()
+				}
 			}
 
 			break
