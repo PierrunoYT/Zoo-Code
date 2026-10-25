@@ -7,6 +7,10 @@ type ToolResultBlock = Anthropic.Messages.ToolResultBlockParam
 
 const INTERRUPTED_RESULT = "Tool execution was interrupted before completion."
 
+function interruptedResult(toolUseId: string): ToolResultBlock {
+	return { type: "tool_result", tool_use_id: toolUseId, content: INTERRUPTED_RESULT, is_error: true }
+}
+
 function toBlocks(content: ApiMessage["content"]): Block[] {
 	if (Array.isArray(content)) return content as Block[]
 	if (content === undefined || content === null || content === "") return []
@@ -51,9 +55,9 @@ export function normalizeToolResultPairing(messages: ApiMessage[]): ApiMessage[]
 				}
 			}
 
-			const results: ToolResultBlock[] = toolUseIds.map(
-				(id) => resultsById.get(id) ?? { type: "tool_result", tool_use_id: id, content: INTERRUPTED_RESULT },
-			)
+			// is_error keeps an interrupted call (e.g. attempt_completion) from reading as a success,
+			// matching the synthetic results written by Task.resumeTaskFromHistory.
+			const results: ToolResultBlock[] = toolUseIds.map((id) => resultsById.get(id) ?? interruptedResult(id))
 
 			if (next.role === "user") {
 				const rest = nextBlocks.filter((block) => block.type !== "tool_result")

@@ -7,6 +7,12 @@ type Block = Anthropic.Messages.ContentBlockParam
 
 const use = (id: string): Block => ({ type: "tool_use", id, name: "read_file", input: {} })
 const result = (id: string, content = `result ${id}`): Block => ({ type: "tool_result", tool_use_id: id, content })
+const interrupted = (id: string): Block => ({
+	type: "tool_result",
+	tool_use_id: id,
+	content: "Tool execution was interrupted before completion.",
+	is_error: true,
+})
 const text = (value: string): Block => ({ type: "text", text: value })
 const image: Block = { type: "image", source: { type: "base64", media_type: "image/png", data: "AAAA" } }
 const assistant = (...content: Block[]): ApiMessage => ({ role: "assistant", content })
@@ -32,11 +38,13 @@ describe("normalizeToolResultPairing", () => {
 	it("adds a synthetic error result for an interrupted tool_use", () => {
 		const input = [assistant(use("A"), use("B")), user(result("A"), text("next"))]
 
-		expect(normalizeToolResultPairing(input)[1].content).toEqual([
-			result("A"),
-			{ type: "tool_result", tool_use_id: "B", content: "Tool execution was interrupted before completion." },
-			text("next"),
-		])
+		expect(normalizeToolResultPairing(input)[1].content).toEqual([result("A"), interrupted("B"), text("next")])
+	})
+
+	it("preserves string content in the user turn after a tool_use", () => {
+		const out = normalizeToolResultPairing([assistant(use("A")), { role: "user", content: "hi" }])
+
+		expect(out[1].content).toEqual([interrupted("A"), text("hi")])
 	})
 
 	it("inserts a user turn when an assistant turn is followed by another assistant turn", () => {
