@@ -364,6 +364,8 @@ describe.each([[RepoPerTaskCheckpointService, "RepoPerTaskCheckpointService"]])(
 						.spyOn(fs, "rm")
 						.mockRejectedValue(Object.assign(new Error("busy"), { code: "EBUSY" }))
 					await service.restoreCheckpoint(checkpoint!.commit)
+					// The removal was attempted (and failed), so the tracked reset below is not just the happy path.
+					expect(rm).toHaveBeenCalledWith(untracked, { force: true, recursive: false })
 					rm.mockRestore()
 					expect(await fs.readFile(testFile, "utf8")).toBe("Hello, world!")
 				})
