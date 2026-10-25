@@ -218,6 +218,86 @@ describe("ClineProvider.delegateParentAndOpenChild()", () => {
 		expect(records.get("parent-1")).toMatchObject({ status: "active", awaitingChildId: undefined })
 	})
 
+	it.each([
+		{
+			name: "the child is deleted between the existence check and the update",
+			deleteBeforeUpdate: true,
+			expected: { status: "active", awaitingChildId: undefined },
+		},
+		{
+			name: "the child update fails for a reason other than deletion",
+			deleteBeforeUpdate: false,
+			expected: { status: "delegated", awaitingChildId: "child-1" },
+		},
+	])("when $name, still rethrows the cancellation", async ({ deleteBeforeUpdate, expected }) => {
+		const parent = makeParentTask()
+		const child = {
+			taskId: "child-1",
+			abort: false,
+			abandoned: false,
+			run: vi.fn(),
+			dispose: vi.fn().mockResolvedValue(undefined),
+		}
+		let current: { taskId: string } | undefined = parent
+		const records = new Map<string, HistoryItem>([["parent-1", { ...parentHistoryItem, status: "interrupted" }]])
+		const store = {
+			invalidate: vi.fn().mockResolvedValue(undefined),
+			get: (id: string) => records.get(id),
+			atomicReadAndUpdate: vi.fn(async (id: string, update: (item: HistoryItem) => HistoryItem) => {
+				if (id === "child-1") {
+					// The child is still stored when checked, then fails to update.
+					if (deleteBeforeUpdate) records.delete(id)
+					throw new Error(`cannot update ${id}`)
+				}
+				const item = records.get(id)
+				if (!item) throw new Error(`missing ${id}`)
+				records.set(id, update(item))
+				if (id === "parent-1") child.abort = true
+				return [...records.values()]
+			}),
+		}
+		const log = vi.fn()
+		const provider = makeProviderStub({
+			taskHistoryStore: store,
+			taskScheduler: { schedule: vi.fn() },
+			createTask: vi.fn(async () => {
+				current = child
+				records.set(child.taskId, {
+					...parentHistoryItem,
+					id: child.taskId,
+					status: "active",
+					parentTaskId: "parent-1",
+				})
+				return child
+			}),
+			createTaskWithHistoryItem: vi.fn(),
+			getCurrentTask: () => current,
+			isViewLaunched: true,
+			emit: vi.fn(),
+			postMessageToWebview: vi.fn(),
+			deleteTaskWithId: vi.fn(),
+			removeClineFromStack: vi.fn(async () => {
+				current = undefined
+			}),
+			log,
+		})
+
+		await expect(
+			ClineProvider.prototype.delegateParentAndOpenChild.call(provider, {
+				parentTaskId: "parent-1",
+				message: "Child",
+				initialTodos: [],
+				mode: "code",
+			}),
+		).rejects.toThrow(/cancelled/)
+
+		expect(records.get("parent-1")).toMatchObject(expected)
+		// A cleanup failure that is not a missing child is logged, never allowed to replace the error.
+		if (!deleteBeforeUpdate) {
+			expect(log).toHaveBeenCalledWith(expect.stringContaining("Failed to repair cancelled handoff"))
+		}
+	})
+
 	it("stops before delegation when refreshing the interrupted task's owner fails", async () => {
 		const parentTask = makeParentTask()
 		const historyItem: HistoryItem = {
