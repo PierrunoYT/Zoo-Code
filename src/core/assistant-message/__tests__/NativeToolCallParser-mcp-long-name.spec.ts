@@ -24,6 +24,14 @@ describe("NativeToolCallParser.parseDynamicMcpTool name for API history", () => 
 		expect(result?.name).toBe(declared)
 	})
 
+	it("parses the declared name of a tool on a server with a very long name", () => {
+		const declared = buildMcpToolName("s".repeat(60), TOOL)
+
+		const result = NativeToolCallParser.parseDynamicMcpTool({ id: "toolu_4", name: declared, arguments: "{}" })
+
+		expect(result).toMatchObject({ type: "mcp_tool_use", name: declared })
+	})
+
 	it("keeps a short name verbatim", () => {
 		const result = NativeToolCallParser.parseDynamicMcpTool({
 			id: "toolu_3",

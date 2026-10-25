@@ -151,7 +151,17 @@ export function buildMcpToolName(serverName: string, toolName: string): string {
 	}
 
 	const hash = createHash("sha256").update(fullName).digest("hex").slice(0, HASH_SUFFIX_LENGTH)
-	return `${fullName.slice(0, MAX_TOOL_NAME_LENGTH - HASH_SUFFIX_LENGTH - 1)}_${hash}`
+	const budget = MAX_TOOL_NAME_LENGTH - HASH_SUFFIX_LENGTH - 1
+	const prefix = `${MCP_TOOL_PREFIX}${MCP_TOOL_SEPARATOR}`
+	// Cap the server part so the second separator and at least one tool character survive;
+	// otherwise the shortened name no longer parses as mcp--server--tool and the call is dropped.
+	// A trailing hyphen is removed so it cannot merge with the separator.
+	const maxServerLength = budget - prefix.length - MCP_TOOL_SEPARATOR.length - 1
+	const server = sanitizeMcpName(serverName).slice(0, maxServerLength).replace(/-+$/, "")
+	const head = `${prefix}${server}${MCP_TOOL_SEPARATOR}`
+	const tool = sanitizeMcpName(toolName).slice(0, budget - head.length)
+
+	return `${head}${tool}_${hash}`
 }
 
 /**
